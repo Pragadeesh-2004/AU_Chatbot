@@ -17,29 +17,29 @@ export default function GuestPage() {
 
   return (
     <div className="space-y-4">
-      <label className="block mb-1 text-white text-lg">Select Guest Type</label>
+      <label className="block mb-2 text-blue-900 text-sm font-semibold">Select Guest Type</label>
       <Select
         value={guestType}
         onValueChange={(value: string) => setGuestType(value as GuestType)}
       >
-        <SelectTrigger className="bg-black text-white border-white h-12 px-4 text-lg flex items-center">
+        <SelectTrigger className="bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300">
           {guestLabels[guestType]}
         </SelectTrigger>
-        <SelectContent className="bg-black text-white border-white">
-          <SelectItem value="anonymous">Anonymous</SelectItem>
-          <SelectItem value="university">University Member</SelectItem>
-          <SelectItem value="visitor">Visitor</SelectItem>
+        <SelectContent className="bg-white text-blue-900 border-blue-400">
+          <SelectItem value="anonymous" className="hover:bg-blue-100 hover:text-blue-900">Anonymous</SelectItem>
+          <SelectItem value="university" className="hover:bg-blue-100 hover:text-blue-900">University Member</SelectItem>
+          <SelectItem value="visitor" className="hover:bg-blue-100 hover:text-blue-900">Visitor</SelectItem>
         </SelectContent>
       </Select>
       <Button
         type="button"
-        className="w-full bg-white text-black hover:bg-gray-200 h-12 text-lg"
+        className="w-full bg-gradient-to-r from-blue-700 to-blue-500 text-white hover:from-blue-800 hover:to-cyan-500 h-10 text-sm font-bold rounded-lg transition-all duration-300 hover:scale-105"
         onClick={() => setShowUser(true)}
       >
         Continue to Chatbot
       </Button>
       {showUser && (
-        <div className="mt-2 text-green-400 text-center text-lg">
+        <div className="mt-2 text-green-600 text-center text-sm">
           Selected user: <span className="font-bold">{guestLabels[guestType]}</span>
         </div>
       )}
