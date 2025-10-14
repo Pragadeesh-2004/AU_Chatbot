@@ -40,7 +40,7 @@ export default function VerifyPage() {
       });
   }, [params, router]);
 
-  if (status === "checking") return <div className="p-8 text-center">Verifying...</div>;
+  if (status === "checking") return <div className="p-8 text-center">Verifying your email link...</div>;
   if (status === "invalid") return <div className="p-8 text-center text-red-600">{error}</div>;
-  return <div className="p-8 text-center text-green-600">Verification successful! Redirecting...</div>;
+  return <div className="p-8 text-center text-green-600">Verification successful! Redirecting to set password...</div>;
 }

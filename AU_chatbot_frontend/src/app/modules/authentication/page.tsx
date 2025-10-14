@@ -1,8 +1,9 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import LoginPage from "./login";
 import SignupPage from "./signup";
 import GuestPage from "./guest";
+import ForgotPasswordPage from "./forgot-password";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -14,17 +15,20 @@ export default function AuthenticationModule() {
   const [tab, setTab] = useState<Tab>("login");
   const [forgotId, setForgotId] = useState("");
   const [showForgotPopup, setShowForgotPopup] = useState(false);
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [particles, setParticles] = useState<
     { left: number; top: number; duration: number; delay: number }[]
   >([]);
+  const [forgotRole, setForgotRole] = useState("student");
+
+  // NEW: Use ref for background blur
+  const blurRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      setMousePosition({
-        x: (e.clientX / window.innerWidth) * 100,
-        y: (e.clientY / window.innerHeight) * 100
-      });
+      if (blurRef.current) {
+        blurRef.current.style.left = `${(e.clientX / window.innerWidth) * 10}%`;
+        blurRef.current.style.top = `${(e.clientY / window.innerHeight) * 10}%`;
+      }
     };
 
     window.addEventListener('mousemove', handleMouseMove);
@@ -32,7 +36,6 @@ export default function AuthenticationModule() {
   }, []);
 
   useEffect(() => {
-    // Only generate random positions on the client
     setParticles(
       Array.from({ length: 10 }).map(() => ({
         left: Math.random() * 100,
@@ -86,7 +89,6 @@ export default function AuthenticationModule() {
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-900 via-blue-600 to-cyan-400 px-2 py-2 relative overflow-hidden">
         {/* Animated Background Elements */}
         <div className="absolute inset-0 pointer-events-none">
-          {/* Floating Particles */}
           {particles.map((p, i) => (
             <div
               key={`particle-${i}`}
@@ -99,12 +101,12 @@ export default function AuthenticationModule() {
               }}
             />
           ))}
-          
           <div 
+            ref={blurRef}
             className="absolute w-72 h-72 bg-gradient-to-br from-cyan-300/20 via-blue-400/15 to-blue-700/20 rounded-full blur-3xl transition-all duration-1000"
             style={{
-              left: `${mousePosition.x / 10}%`,
-              top: `${mousePosition.y / 10}%`,
+              left: `5%`,
+              top: `5%`,
             }}
           />
         </div>
@@ -167,74 +169,27 @@ export default function AuthenticationModule() {
                     </TabsContent>
                   </div>
                 </Tabs>
-                <div className="mt-4 flex justify-center">
-                  <button
-                    type="button"
-                    className="text-blue-700 underline hover:text-cyan-600 text-sm font-semibold transition-all duration-300 hover:scale-105"
-                    onClick={() => setTab("forgot")}
-                  >
-                    Forgot Password?
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="bg-white/95 rounded-lg p-6 flex flex-col justify-center relative shadow-inner backdrop-blur-sm border border-white/50 animate-fade-in">
-                <button
-                  type="button"
-                  className="text-blue-700 hover:text-cyan-600 mb-3 transition-all duration-300 hover:scale-110"
-                  style={{ alignSelf: "flex-start", position: "static" }}
-                  onClick={() => {
-                    setTab("login");
-                    setForgotId("");
-                    setShowForgotPopup(false);
-                  }}
-                  aria-label="Back to Home"
-                >
-                  <ArrowLeft size={24} />
-                </button>
-                {!showForgotPopup ? (
-                  <>
-                    <h2 className="text-xl font-bold text-center mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-800 to-cyan-600">
-                      Forgot Password
-                    </h2>
-                    <label className="block text-blue-700 text-sm mb-2 text-left font-semibold">
-                      ID
-                    </label>
-                    <Input
-                      type="text"
-                      value={forgotId}
-                      onChange={(e) => setForgotId(e.target.value)}
-                      placeholder="Enter your ID"
-                      className="bg-white border-blue-400 h-10 px-3 text-sm mb-4 w-full text-blue-900 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
-                    />
-                    <Button
+                {/* Only show Forgot Password on Login tab */}
+                {tab === "login" && (
+                  <div className="mt-4 flex justify-center">
+                    <button
                       type="button"
-                      className="w-full bg-gradient-to-r from-blue-700 to-blue-500 text-white hover:from-blue-800 hover:to-cyan-500 h-10 text-sm font-bold rounded-lg transition-all duration-300 hover:scale-105"
-                      onClick={() => setShowForgotPopup(true)}
+                      className="text-blue-700 underline hover:text-cyan-600 text-sm font-semibold transition-all duration-300 hover:scale-105"
+                      onClick={() => setTab("forgot")}
                     >
-                      Next
-                    </Button>
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-48 w-full">
-                    <div className="bg-green-100 p-3 rounded-full mb-3">
-                      <svg className="w-6 h-6 text-green-600" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <p className="mb-4 text-sm text-center text-blue-700">
-                      Link to change the password has been sent to your registered email ID.
-                    </p>
-                    <Button
-                      type="button"
-                      className="bg-gradient-to-r from-blue-700 to-blue-500 text-white hover:from-blue-800 hover:to-cyan-500 w-full h-10 text-sm font-bold rounded-lg transition-all duration-300 hover:scale-105"
-                      onClick={() => alert("Resend email placeholder")}
-                    >
-                      Resend
-                    </Button>
+                      Forgot Password?
+                    </button>
                   </div>
                 )}
-              </div>
+              </>
+            ) : (
+              <ForgotPasswordPage
+                onBack={() => {
+                  setTab("login");
+                  setForgotId("");
+                  setShowForgotPopup(false);
+                }}
+              />
             )}
           </div>
         </div>

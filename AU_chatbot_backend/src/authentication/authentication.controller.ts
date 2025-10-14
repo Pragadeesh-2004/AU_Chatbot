@@ -16,10 +16,10 @@ export class AuthenticationController {
   }
 
   // Called by frontend when user clicks verification link
-  @Get('verify-code')
-  async verifyCode(@Query('role') role: string, @Query('id') id: string, @Query('code') code: string) {
+  @Post('verify-code')
+  async verifyCode(@Body() body: { role: string; id: string; code: string }) {
     try {
-      return await this.authService.verifyCode(role, id, code);
+      return await this.authService.verifyCodeWithInput(body.role, body.id, body.code);
     } catch (e) {
       throw new BadRequestException(e.message);
     }
@@ -42,5 +42,49 @@ export class AuthenticationController {
     } catch (e) {
       throw new BadRequestException(e.message);
     }
+  }
+
+  @Post('login')
+  async login(@Body() body: { role: string; id: string; password: string }) {
+    try {
+      return await this.authService.login(body.role, body.id, body.password);
+    } catch (e) {
+      throw new BadRequestException(e.message);
+    }
+  }
+
+  @Post('forgot-password/send-code')
+  async forgotPasswordSendCode(@Body() body: { role: string; id: string }) {
+    try {
+      return await this.authService.sendResetCode(body.role, body.id);
+    } catch (e) {
+      throw new BadRequestException(e.message);
+    }
+  }
+
+  @Post('forgot-password/verify-code')
+  async forgotPasswordVerifyCode(@Body() body: { role: string; id: string; code: string }) {
+    try {
+      return await this.authService.verifyResetCode(body.role, body.id, body.code);
+    } catch (e) {
+      throw new BadRequestException(e.message);
+    }
+  }
+
+  @Post('forgot-password/reset')
+  async forgotPasswordReset(@Body() body: { role: string; id: string; code: string; password: string }) {
+    try {
+      return await this.authService.resetPassword(body.role, body.id, body.code, body.password);
+    } catch (e) {
+      throw new BadRequestException(e.message);
+    }
+  }
+
+  @Post('guest-visit')
+  async guestVisit(@Body() body: { guestType: 'visitor' | 'university' }) {
+    if (!['visitor', 'university'].includes(body.guestType)) {
+      throw new Error('Invalid guest type');
+    }
+    return this.authService.incrementGuestVisit(body.guestType);
   }
 }

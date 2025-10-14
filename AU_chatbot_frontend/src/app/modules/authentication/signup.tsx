@@ -64,6 +64,9 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
   const [inputError, setInputError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [token, setToken] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [resendCount, setResendCount] = useState(0);
 
   const params = useSearchParams();
   useEffect(() => {
@@ -104,31 +107,62 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
     }
   };
 
-  // Step 2: Simulate clicking verification link (in real app, this would be via email link)
-  const handleVerify = async () => {
-    setVerified(true);
-    setStep(3);
+  // Step 2: Verify code from email
+  const handleVerifyCode = async () => {
+    setCodeError(null);
+    try {
+      await apiPost("verify-code", { role, id, code });
+      // Move to password step
+      setStep(3);
+    } catch (e: any) {
+      setCodeError(e.message || "Invalid or expired code.");
+    }
   };
 
   // Step 3: Complete signup with token from URL
   const handleCompleteSignup = async () => {
-    try {
-      const useToken = token || btoa(`${role}:${id}:${Date.now()}`);
-      const response = await apiPost("verify", { token: useToken, password });
-      alert("Signup complete! You can now login.");
-      // Reset form and go back to step 1 or redirect
-      setStep(1);
-      setId("");
-      setPassword("");
-      setConfirm("");
-      setEmailSent(false);
-      setVerified(false);
-      setInputError(null);
-      if (onBackToLogin) onBackToLogin();
-    } catch (e: any) {
-      alert(e.message || "Failed to complete signup");
+  try {
+    const useToken = token || btoa(`${role}:${id}:${Date.now()}`);
+
+    // Step 1: Verify token and password
+    const response = await apiPost("verify", { token: useToken, password });
+
+    const userName = response?.name || "";
+
+    // Step 2: Create memory for the user
+    const memRes = await fetch(`${API_BASE}/chatbot/add-user`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, id, name: userName }) // Remove 'sessions' if backend does not accept it
+    });
+
+    if (!memRes.ok) {
+      const err = await memRes.json().catch(() => ({}));
+      console.error("Memory creation failed:", err);
+      window.alert(
+        "Signup succeeded but memory creation failed: " +
+          (err.message || memRes.statusText)
+      );
+      return;
     }
-  };
+
+    // Step 3: Success
+    window.alert(`Signup complete for ${userName || "your account"}! You can now login.`);
+    setStep(1);
+    setId("");
+    setPassword("");
+    setConfirm("");
+    setEmailSent(false);
+    setVerified(false);
+    setInputError(null);
+    if (onBackToLogin) onBackToLogin();
+    else window.location.href = "/modules/authentication";
+
+  } catch (e: any) {
+    window.alert(e.message || "Failed to complete signup");
+  }
+};
+
 
   const handleBack = () => {
     setStep(1);
@@ -213,7 +247,7 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
       )}
 
       {/* Step 2: Email Verification */}
-      {step === 2 && !verified && (
+      {step === 2 && (
         <>
           <button
             type="button"
@@ -226,23 +260,44 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
           <div className="flex flex-col items-center justify-center mt-8">
             <Mail className="mb-4 text-blue-700" size={40} />
             <p className="text-blue-900 mb-4 mt-8 text-lg font-semibold">
-              Verification link has been sent to your registered email.
+              Enter the 6-digit code sent to your registered email.
             </p>
-            <Button
-              type="button"
-              className="bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 mb-2 w-full h-12 text-lg"
-              onClick={handleVerify}
-            >
-              I've clicked the verification link
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full h-12 text-lg border-blue-400 text-blue-900"
-              onClick={handleSendEmail}
-            >
-              Resend Email
-            </Button>
+            <div className="w-full max-w-xs">
+              <Input
+                type="text"
+                value={code}
+                onChange={e => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                maxLength={6}
+                placeholder="Enter code"
+                className="mb-2 text-center tracking-widest text-lg"
+              />
+              <Button
+                onClick={handleVerifyCode}
+                disabled={code.length !== 6}
+                className="w-full bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 h-10 text-base rounded-lg mb-2"
+              >
+                Verify Code
+              </Button>
+              {codeError && <div className="text-red-500 text-xs mb-2">{codeError}</div>}
+              <Button
+                onClick={handleSendEmail}
+                className="w-full bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 h-10 text-base rounded-lg mb-2"
+                disabled={resendCount >= 3}
+              >
+                Resend Code
+              </Button>
+              <div className="text-xs text-gray-500 mb-2 text-center">
+                {resendCount >= 3
+                  ? "You have reached the maximum number of resends for today."
+                  : `You can resend the code ${3 - resendCount} more time(s) today.`}
+              </div>
+              <Button
+                onClick={handleBack}
+                className="w-full bg-gray-200 text-blue-900 hover:bg-gray-300 h-10 text-base rounded-lg"
+              >
+                Back
+              </Button>
+            </div>
           </div>
         </>
       )}

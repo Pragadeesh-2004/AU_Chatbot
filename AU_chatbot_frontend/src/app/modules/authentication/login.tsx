@@ -27,14 +27,74 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showMsg, setShowMsg] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const currentRole = roleOptions.find(r => r.value === role);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // ...your login logic...
-    // If login is successful:
-    router.push("/modules/chatbot");
+    setError(null);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/authentication/login`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role, id, password }),
+        }
+      );
+      
+      if (!res.ok) {
+        let data: any = {};
+        try {
+          const responseText = await res.text();
+          console.log("Backend response:", responseText); // Debug: see what backend actually sends
+          data = JSON.parse(responseText);
+          console.log("Parsed data:", data); // Debug: see parsed object
+          console.log("Message field:", data.message, typeof data.message); // Debug: check message field
+        } catch (parseErr) {
+          console.error("JSON parse error:", parseErr);
+          setError("Unable to connect to server");
+          return;
+        }
+        
+        // Extract ONLY the message string from backend JSON
+        let errorMessage = "Login failed";
+        
+        if (data && data.message) {
+          // Ensure we get a clean string, not an object
+          if (typeof data.message === "string") {
+            errorMessage = data.message.message;
+          } else if (typeof data.message === "object") {
+            // If somehow message is an object, stringify it
+            errorMessage = String(JSON.stringify(data.message.message));
+          } else {
+            // Convert any other type to string
+            errorMessage = String(data.message.message);
+          }
+        } else if (data && data.error && typeof data.error === "string" && data.error !== "Bad Request") {
+          errorMessage = data.error;
+        }
+        
+        console.log("Final error message to display:", errorMessage); // Debug: see what will be shown
+        setError(errorMessage);
+        return;
+      }
+      
+      // Success case
+      const data = await res.json();
+      console.log("Login successful:", data);
+
+      // Store user info in localStorage
+      localStorage.setItem("userName", data.user.name || "Guest");
+      localStorage.setItem("userRole", role);
+      localStorage.setItem("userId", id);
+
+      router.push("/modules/chatbot");
+    } catch (err: any) {
+      console.error("Network/fetch error:", err);
+      setError("Network error. Please try again.");
+    }
   };
 
   return (
@@ -105,6 +165,11 @@ export default function LoginPage() {
       {showMsg && (
         <div className="mt-2 text-green-600 text-center text-sm">
           Ready to go to chatbot!
+        </div>
+      )}
+      {error && (
+        <div className="mt-2 text-red-600 text-center text-sm">
+          {error}
         </div>
       )}
     </form>
