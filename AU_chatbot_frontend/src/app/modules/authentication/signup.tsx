@@ -1,5 +1,5 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,9 +10,11 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { User, ArrowLeft, Mail, Lock, Eye, EyeOff } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 
 // --- API utility in this file ---
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000";
+
 async function apiPost(path: string, data: any) {
   const res = await fetch(`${API_BASE}/authentication/${path}`, {
     method: "POST",
@@ -25,7 +27,18 @@ async function apiPost(path: string, data: any) {
   } catch {
     // ignore
   }
-  if (!res.ok) throw new Error(json.error || json.message || "API error");
+  // --- Fix: Always extract a string error message ---
+  let errorMsg = "API error";
+  if (json) {
+    if (typeof json.message === "string") {
+      errorMsg = json.message;
+    } else if (json.message && typeof json.message === "object" && typeof json.message.message === "string") {
+      errorMsg = json.message.message;
+    } else if (typeof json.error === "string") {
+      errorMsg = json.error;
+    }
+  }
+  if (!res.ok) throw new Error(errorMsg);
   return json;
 }
 // ---
@@ -49,18 +62,45 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+
+  const params = useSearchParams();
+  useEffect(() => {
+    // If redirected from verify page with token, go to step 3
+    const stepParam = params.get("step");
+    const tokenParam = params.get("token");
+    if (stepParam === "3" && tokenParam) {
+      setStep(3);
+      setVerified(true);
+      setToken(tokenParam);
+    }
+  }, [params]);
 
   const currentRole = roleOptions.find(r => r.value === role);
 
-  // Step 1: Send verification email
+  // Step 1: Check user and send verification email
   const handleSendEmail = async () => {
     setInputError(null);
+    setIsLoading(true);
     try {
-      await apiPost("signup", { role, id });
+      const response = await apiPost("signup", { role, id });
       setEmailSent(true);
       setStep(2);
     } catch (e: any) {
-      setInputError(e.message || "Failed to send verification email");
+      // Try to parse backend error message for user not found
+      let msg = e?.message || "";
+      if (
+        msg.toLowerCase().includes("not found") ||
+        msg.toLowerCase().includes("check your role") ||
+        msg.toLowerCase().includes("no anna university data")
+      ) {
+        setInputError("User and ID do not exist. Please check your role and number and try again.");
+      } else {
+        setInputError(msg || "Something went wrong. Please try again.");
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -70,14 +110,21 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
     setStep(3);
   };
 
-  // Step 3: Complete signup (set password)
+  // Step 3: Complete signup with token from URL
   const handleCompleteSignup = async () => {
     try {
-      // In a real app, you'd get the token from the email link
-      const token = btoa(`${role}:${id}:dummy`); // Replace with real token from email in production
-      await apiPost("verify", { token, password });
-      alert("Signup complete!");
-      // Optionally redirect or reset state
+      const useToken = token || btoa(`${role}:${id}:${Date.now()}`);
+      const response = await apiPost("verify", { token: useToken, password });
+      alert("Signup complete! You can now login.");
+      // Reset form and go back to step 1 or redirect
+      setStep(1);
+      setId("");
+      setPassword("");
+      setConfirm("");
+      setEmailSent(false);
+      setVerified(false);
+      setInputError(null);
+      if (onBackToLogin) onBackToLogin();
     } catch (e: any) {
       alert(e.message || "Failed to complete signup");
     }
@@ -90,6 +137,7 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
     setConfirm("");
     setEmailSent(false);
     setVerified(false);
+    setInputError(null);
     if (onBackToLogin) onBackToLogin();
   };
 
@@ -100,7 +148,7 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
         <>
           <div>
             <label className="block mb-2 text-blue-900 text-sm font-semibold">Role</label>
-            <Select value={role} onValueChange={value => { setRole(value); setId(""); }}>
+            <Select value={role} onValueChange={value => { setRole(value); setId(""); setInputError(null); }}>
               <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
                 <SelectValue placeholder="Select role" />
               </SelectTrigger>
@@ -142,8 +190,8 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
                       setId(e.target.value.replace(/\D/g, ""));
                       setInputError(null);
                     }}
-                    placeholder={inputError ? inputError : `Enter your ${currentRole?.idLabel}`}
-                    className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${inputError ? "border-red-500" : ""}`}
+                    placeholder={`Enter your ${currentRole?.idLabel}`}
+                    className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${inputError ? "border-red-500 placeholder-red-500" : ""}`}
                   />
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
                 </div>
@@ -153,17 +201,12 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
               </div>
               <Button
                 type="button"
-                className="w-full bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 h-10 text-sm rounded-lg mt-6"
-                disabled={!id}
+                className="w-full bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 h-10 text-sm rounded-lg mt-6 disabled:opacity-50"
+                disabled={!id || isLoading}
                 onClick={handleSendEmail}
               >
-                Send Verification Email
+                {isLoading ? "Checking..." : "Send Verification Email"}
               </Button>
-              {inputError && (
-                <div className="mt-4 text-red-500 text-sm text-center">
-                  {inputError}
-                </div>
-              )}
             </>
           )}
         </>

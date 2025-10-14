@@ -1,8 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
-import * as nodemailer from 'nodemailer';
-import * as bcrypt from 'bcryptjs'; // Use bcryptjs for compatibility
+import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class AuthenticationService {
@@ -20,64 +19,70 @@ export class AuthenticationService {
       user = doc.students.find((s: any) => s.student_id === id);
     } else if (role === 'faculty') {
       user = doc.faculty.find((f: any) => f.faculty_id === id);
-    } else if (role === 'scholar') {
-      user = doc.scholars.find((s: any) => s.scholar_id === id);
     } else if (role === 'official') {
       user = doc.officials.find((o: any) => o.official_id === id);
+    } else if (role === 'scholar') {
+      user = doc.scholars.find((s: any) => s.scholar_id === id);
     } else if (role === 'admin') {
       if (doc.admin_id === id) user = { admin_id: id, email: doc.email, name: 'Admin' };
     }
     return user;
   }
 
-  async signup(role: string, id: string) {
+  // Generate and send verification code
+  async signupAndSendEmail(role: string, id: string) {
     const annaUser = await this.findAnnaUser(role, id);
     if (!annaUser) {
-      throw new Error('User not found for this role and ID in Anna University records.');
+      throw new Error('User not found. Please check your role and ID and try again.');
     }
 
-    // Send verification email
-    const token = Buffer.from(`${role}:${id}:${Date.now()}`).toString('base64');
-    const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/modules/authentication/verify?token=${encodeURIComponent(token)}`;
+    // Generate a 6-digit code and expiry (5 mins)
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Store code and expiry in a temp collection
+    await this.universityConnection.collection('verifications').updateOne(
+      { role, id },
+      { $set: { code, expiresAt } },
+      { upsert: true }
+    );
+
+    // Verification link with code as query param
+    const verifyUrl = `${process.env.FRONTEND_URL || 'http://localhost:3001'}/modules/authentication/verify?role=${role}&id=${id}&code=${code}`;
+
     await this.sendMail(
       annaUser.email,
       'Verify your University Account',
-      `<p>Hello ${annaUser.name || ''},</p><p>Click <a href="${verifyUrl}">here</a> to verify your account and set your password.</p>`
+      `<p>Hello ${annaUser.name || ''},</p>
+      <p>Your verification code is: <b>${code}</b></p>
+      <p>Or click <a href="${verifyUrl}">here</a> to verify your account. This code/link is valid for 5 minutes.</p>`
     );
 
-    // Return user details (for placeholder replacement in frontend)
     return {
-      message: 'Verification email sent.',
-      user: annaUser,
+      message: 'Verification email sent successfully.',
       email: annaUser.email,
       name: annaUser.name,
-      department: annaUser.department,
-      degree: annaUser.degree,
-      branch: annaUser.branch,
-      year: annaUser.year,
-      designation: annaUser.designation,
     };
   }
 
-  async sendMail(to: string, subject: string, html: string) {
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.example.com',
-      port: Number(process.env.EMAIL_PORT) || 587,
-      secure: false,
-      auth: {
-        user: process.env.EMAIL_FROM || 'noreply@university.com',
-        pass: process.env.EMAIL_PASS || 'password',
-      },
-    });
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM || 'noreply@university.com',
-      to,
-      subject,
-      html,
-    });
+  // Verify code (called by frontend when link is clicked)
+  async verifyCode(role: string, id: string, code: string) {
+    const record = await this.universityConnection.collection('verifications').findOne({ role, id, code });
+    if (!record) throw new Error('Invalid or expired verification code.');
+    if (new Date(record.expiresAt) < new Date()) throw new Error('Verification code expired.');
+    return { message: 'Code valid' };
   }
 
+  async sendMail(to: string, subject: string, html: string) {
+    console.log('Mock email sent to:', to);
+    console.log('Subject:', subject);
+    console.log('HTML:', html);
+    // Email sending is mocked for now
+  }
+
+  // Complete signup (set password)
   async verify(token: string, password: string) {
+    // token = base64(role:id)
     const [role, id] = Buffer.from(token, 'base64').toString().split(':');
     const annaUser = await this.findAnnaUser(role, id);
     if (!annaUser) throw new Error('User not found in Anna University records.');
@@ -90,6 +95,8 @@ export class AuthenticationService {
       createdAt: new Date(),
     };
     await this.universityConnection.collection('user').insertOne(userDoc);
+    // Remove verification record
+    await this.universityConnection.collection('verifications').deleteOne({ role, id });
     return { message: 'Signup complete.' };
   }
 
@@ -100,6 +107,4 @@ export class AuthenticationService {
     }
     return doc;
   }
-
-
 }

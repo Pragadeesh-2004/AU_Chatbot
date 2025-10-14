@@ -12,7 +12,7 @@ async function bootstrap() {
 
   // Enable CORS for frontend on port 3001
   app.enableCors({
-    origin: 'http://localhost:3001', // your Next.js frontend
+    origin: 'https://ominous-doodle-g459qvv9r7j4f97wx-3001.app.github.dev', // your Next.js frontend
     credentials: true,               // optional if you need cookies later
   });
 
@@ -36,7 +36,7 @@ async function bootstrap() {
 
   const port = process.env.PORT || 3000;
   await app.listen(port);
-  console.log(`🚀 Server running at http://localhost:${port}`);
+  console.log(`🚀 Server running at https://ominous-doodle-g459qvv9r7j4f97wx-3000.app.github.dev`);
 }
 
 bootstrap();

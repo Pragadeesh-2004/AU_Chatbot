@@ -3,7 +3,7 @@ import "./globals.css";
 import "@/store/rateLimitStore"; // Initialize the store
 
 export const metadata: Metadata = {
-  title: "Rate Limit Management",
+  title: "Chatbot",
   description: "Organization rate limit management",
 };
 
