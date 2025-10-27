@@ -97,7 +97,7 @@ export class AdminService {
     };
   }
 
-  // Set rate limits for a role
+  // Set rate limits for a role and update all users in the array for that role
   async setRateLimit(role: string, data: RateLimitData): Promise<RateLimitData> {
     const config = ROLE_CONFIG[role];
     if (!config) throw new Error('Invalid role');
@@ -119,6 +119,7 @@ export class AdminService {
       memory_count: data.memory_count ?? existing?.memory_count ?? 50,
     };
 
+    // Update the main document
     await this.universityConnection
       .collection('rate_limit')
       .updateOne(
@@ -131,6 +132,34 @@ export class AdminService {
         },
         { upsert: true }
       );
+
+    // Update all users in the array for this role (except guest, which is always empty)
+    if (config.arrayField !== "guest") {
+      // Fetch the document again to get the latest array
+      const docAfterUpdate = await this.universityConnection
+        .collection('rate_limit')
+        .findOne({ _id: docId });
+
+      const userArray = docAfterUpdate?.[config.arrayField] || [];
+      // Update each user in the array
+      const updatedUsers = userArray.map((user: any) => ({
+        ...user,
+        balance_request_per_day: safeData.request_per_day,
+        balance_input_token_per_day: safeData.input_token_per_day,
+        balance_output_token_per_day: safeData.output_token_per_day,
+        balance_file_count: safeData.file_count,
+        memory_count_used: user.memory_count_used ?? 0, // keep user's memory usage
+        last_reset: new Date()
+      }));
+
+      // Set the updated array back in the document
+      await this.universityConnection
+        .collection('rate_limit')
+        .updateOne(
+          { _id: docId },
+          { $set: { [config.arrayField]: updatedUsers } }
+        );
+    }
 
     return safeData;
   }
@@ -329,7 +358,7 @@ export class AdminService {
     }, msUntilMidnight);
   }
 
-  // Reset all users' daily limits
+  // Reset all users' daily limits (only balances, not overall document values)
   private async resetAllUserLimits(): Promise<void> {
     try {
       for (const role of Object.keys(ROLE_CONFIG)) {
@@ -337,25 +366,35 @@ export class AdminService {
         const docId = new Types.ObjectId(config.docId);
         const defaultLimits = await this.getRateLimit(role);
 
+        // Fetch the document to get the user array
+        const doc = await this.universityConnection
+          .collection('rate_limit')
+          .findOne({ _id: docId });
+
+        if (!doc || !doc[config.arrayField] || !Array.isArray(doc[config.arrayField])) continue;
+
+        // Update each user in the array with the admin-set limits
+        const updatedUsers = doc[config.arrayField].map((user: any) => ({
+          ...user,
+          balance_request_per_day: defaultLimits.request_per_day,
+          balance_input_token_per_day: defaultLimits.input_token_per_day,
+          balance_output_token_per_day: defaultLimits.output_token_per_day,
+          balance_file_count: defaultLimits.file_count,
+          memory_count_used: user.memory_count_used ?? 0, // preserve user's memory usage
+          last_reset: new Date()
+        }));
+
+        // Write the updated array back to the document
         await this.universityConnection
           .collection('rate_limit')
-          .updateMany(
+          .updateOne(
             { _id: docId },
-            {
-              $set: {
-                [`${config.arrayField}.$[].balance_request_per_day`]: defaultLimits.request_per_day,
-                [`${config.arrayField}.$[].balance_input_token_per_day`]: defaultLimits.input_token_per_day,   // changed
-                [`${config.arrayField}.$[].balance_output_token_per_day`]: defaultLimits.output_token_per_day, // changed
-                [`${config.arrayField}.$[].balance_file_count`]: defaultLimits.file_count,
-                [`${config.arrayField}.$[].memory_count_used`]: 0,
-                [`${config.arrayField}.$[].last_reset`]: new Date()
-              }
-            }
+            { $set: { [config.arrayField]: updatedUsers } }
           );
       }
-      console.log('Daily rate limits reset completed at:', new Date());
+      console.log('Daily user balances reset completed at:', new Date());
     } catch (error) {
-      console.error('Error resetting daily limits:', error);
+      console.error('Error resetting daily user balances:', error);
     }
   }
 
@@ -368,5 +407,19 @@ export class AdminService {
       { id: 4, name: 'Scholars', role: 'scholar', count: 0 },
       { id: 5, name: 'Officials', role: 'official', count: 0 },
     ];
+  }
+
+  // Add this helper to set memory_count_used for a user (uses admin ROLE_CONFIG docId)
+  async setUserMemoryCount(role: string, userId: string, count: number): Promise<void> {
+    const config = ROLE_CONFIG[role];
+    if (!config) throw new Error('Invalid role');
+
+    const docId = new Types.ObjectId(config.docId);
+    await this.universityConnection
+      .collection('rate_limit')
+      .updateOne(
+        { _id: docId, [`${config.arrayField}.${config.idField}`]: userId },
+        { $set: { [`${config.arrayField}.$.memory_count_used`]: count } }
+      );
   }
 }

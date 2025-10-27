@@ -20,7 +20,11 @@ const roleOptions = [
   { value: "student", label: "Student", idLabel: "Roll No" },
 ];
 
-export default function LoginPage() {
+type LoginPageProps = {
+  showDialog?: (type: "error" | "success", message: string) => void;
+};
+
+export default function LoginPage({ showDialog }: LoginPageProps) {
   const router = useRouter();
   const [role, setRole] = useState("student");
   const [id, setId] = useState("");

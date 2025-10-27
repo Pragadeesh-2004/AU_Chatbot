@@ -36,6 +36,7 @@ export default function ChatbotPage() {
   const [user, setUser] = useState({ id: "guest", name: "Guest", role: "guest" });
   const [userMemory, setUserMemory] = useState<any>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [composingNew, setComposingNew] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [profileSidebarOpen, setProfileSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -132,41 +133,127 @@ export default function ChatbotPage() {
     setShowUploadOptions(false);
   };
 
-  const handleSend = async () => {
-    if (!input.trim() && selectedFiles.length === 0 && selectedImages.length === 0) return;
-    await fetch(`${API_BASE}/chatbot/add-qa`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        role: user.role,
-        id: user.id,
-        session_id: selectedSession,
-        question: input.trim(),
-        answer: "This is a placeholder bot answer.",
-        timestamp: new Date().toISOString()
-      })
-    });
-    setInput("");
-    setSelectedFiles([]);
-    setSelectedImages([]);
-    fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`)
-      .then(res => res.json())
-      .then(data => setUserMemory(data));
-  };
+  // Simple heuristic title generator (produce 2-3 meaningful words)
+  function generateTitleFromText(text: string, maxWords = 3, minWords = 2) {
+    if (!text) return "New Chat";
+    const cleaned = text
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/[^\w\s'-]/g, ""); // remove punctuation
 
-  const handleNewChat = async () => {
-    const session_name = `Chat ${userMemory?.sessions?.length + 1 || 1}`;
+    if (!cleaned) return "New Chat";
+
+    const stopwords = new Set([
+      "the","a","an","to","for","of","in","on","and","or","is","are","was","were",
+      "with","my","me","i","how","what","why","when","where","please","please:"
+    ]);
+
+    const tokens = cleaned.split(" ").map(t => t.trim()).filter(Boolean);
+    const meaningful = tokens.filter(w => !stopwords.has(w.toLowerCase()));
+
+    const pick = meaningful.length > 0 ? meaningful : tokens;
+
+    // prefer 2-3 words; if there are many tokens pick the most informative first few
+    const count = Math.min(maxWords, Math.max(minWords, pick.length));
+    const titleWords = pick.slice(0, count);
+
+    const capitalize = (w: string) => w[0]?.toUpperCase() + w.slice(1).toLowerCase();
+    let title = titleWords.map(capitalize).join(" ");
+
+    // fallback: if title too short or still generic, try using first 2 content words from full tokens
+    if ((titleWords.length < minWords || title.match(/^(New|Chat)$/i)) && tokens.length > titleWords.length) {
+      const fallback = tokens.filter(w => !stopwords.has(w.toLowerCase())).slice(0, minWords);
+      if (fallback.length) title = fallback.map(capitalize).join(" ");
+    }
+
+    // limit length
+    if (title.length > 40) {
+      title = title.split(" ").slice(0, 3).map(capitalize).join(" ");
+    }
+
+    return title || "New Chat";
+  }
+
+  // create session helper (calls backend add-session)
+  const createSession = async (session_name: string) => {
     const res = await fetch(`${API_BASE}/chatbot/add-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: user.role, id: user.id, session_name })
     });
+    if (!res.ok) throw new Error("Failed to create session");
     const data = await res.json();
-    setSelectedSession(data.session_id);
+    return data.session_id;
+  };
+
+  // Helper to get memory limits for the current user
+  const getUserMemoryLimits = () => {
+    // Find the user object in the current role array (students, faculty, etc.)
+    if (!userMemory || !userMemory[user.role + "s"]) return { used: 0, max: 0 };
+    const userObj = userMemory[user.role + "s"].find((u: any) => u[`${user.role}_id`] === user.id);
+    return {
+      used: userObj?.memory_count_used ?? 0,
+      max: userObj?.memory_count ?? 0,
+    };
+  };
+
+  const handleNewChat = async () => {
+    const { used, max } = getUserMemoryLimits();
+    if (max > 0 && used >= max) {
+      setAlertDialogMessage(
+        `You have reached your memory limit (${max} chats). Please delete old chats to create a new one.`
+      );
+      setAlertDialogOpen(true);
+      return;
+    }
+    setSelectedSession(null);
     setInput("");
-    fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`)
-      .then(res => res.json())
-      .then(mem => setUserMemory(mem));
+    setComposingNew(true);
+    // leave userMemory unchanged; UI will show empty message area for new chat
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() && selectedFiles.length === 0 && selectedImages.length === 0) return;
+
+    try {
+      let sessionId = selectedSession;
+
+      // If composing a new chat (no session yet) create session on first send
+      if (!sessionId) {
+        const generatedTitle = generateTitleFromText(input, 5);
+        sessionId = await createSession(generatedTitle);
+        setSelectedSession(sessionId);
+        setComposingNew(false);
+      }
+
+      // send QA to backend with the resolved session id
+      await fetch(`${API_BASE}/chatbot/add-qa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          role: user.role,
+          id: user.id,
+          session_id: sessionId,
+          question: input.trim(),
+          answer: "This is a placeholder bot answer.",
+          timestamp: new Date().toISOString()
+        })
+      });
+
+      setInput("");
+      setSelectedFiles([]);
+      setSelectedImages([]);
+
+      // refresh memory and ensure new session is visible
+      const memRes = await fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`);
+      const memData = await memRes.json();
+      setUserMemory(memData);
+      // if backend returned newly created session position is first, ensure selectedSession remains set
+      if (!selectedSession) setSelectedSession(sessionId);
+    } catch (err) {
+      setAlertDialogMessage("Failed to send message.");
+      setAlertDialogOpen(true);
+    }
   };
 
   const handleDeleteChat = async (session_id: string) => {

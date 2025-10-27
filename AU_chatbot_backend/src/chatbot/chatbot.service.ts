@@ -7,6 +7,7 @@ import { AddSessionDto } from "./dto/add-session.dto";
 import { AddQADto } from "./dto/add-qa.dto";
 import { DeleteSessionDto } from "./dto/delete-session.dto";
 import { DeleteUserDto } from "./dto/delete-user.dto";
+import { AdminService } from '../admin/admin.service'; // Add this import
 
 const ROLE_CONFIG = {
   student: {
@@ -34,7 +35,8 @@ const ROLE_CONFIG = {
 @Injectable()
 export class ChatbotService {
   constructor(
-    @InjectConnection("university") private universityConnection: Connection
+    @InjectConnection("university") private universityConnection: Connection,
+    private adminService: AdminService // Inject AdminService
   ) {}
 
   async addUser(dto: CreateUserDto) {
@@ -74,11 +76,7 @@ export class ChatbotService {
           [`${config.array}.$[user].sessions`]: {
             session_id: nextSessionId,
             session_name: dto.session_name,
-            qa: [] as {
-              question: string;
-              answer: string;
-              timestamp: string;
-            }[]
+            qa: []
           }
         } as any
       },
@@ -86,6 +84,20 @@ export class ChatbotService {
         arrayFilters: [{ [`user.${config.idField}`]: dto.id }]
       }
     );
+
+    // --- Correct session count logic ---
+    // Fetch the updated document
+    const updatedDoc = await this.universityConnection
+      .collection("memory")
+      .findOne({ _id: docId });
+
+    // Guard against null and use optional chaining / nullish coalescing
+    const updatedUserArr = (updatedDoc?.[config.array] as any[]) ?? [];
+    const updatedUser = updatedUserArr.find((u: any) => u[config.idField] === dto.id);
+    const sessionCount = updatedUser?.sessions?.length ?? 0;
+
+    // Use AdminService helper to update the correct rate_limit document/array
+    await this.adminService.setUserMemoryCount(dto.role, dto.id, sessionCount);
 
     return { session_id: nextSessionId };
   }
@@ -154,15 +166,34 @@ async addQA(dto: AddQADto) {
   const config = ROLE_CONFIG[dto.role];
   const docId = new Types.ObjectId(config.doc);
 
-  // Use positional $ operator to target the user, then $pull session by session_id
+  // Remove session from the specific user's sessions array using arrayFilters
   await this.universityConnection.collection("memory").updateOne(
-    { _id: docId, [`${config.array}.${config.idField}`]: dto.id },
+    { _id: docId },
     {
       $pull: {
-        [`${config.array}.$.sessions`]: { session_id: dto.session_id }
+        [`${config.array}.$[user].sessions`]: { session_id: dto.session_id }
       } as any
+    },
+    {
+      arrayFilters: [{ [`user.${config.idField}`]: dto.id }]
     }
   );
+
+  // Re-fetch document and compute updated session count for the user
+  const updatedDoc = await this.universityConnection
+    .collection("memory")
+    .findOne({ _id: docId });
+
+  const updatedUserArr = (updatedDoc?.[config.array] as any[]) ?? [];
+  const updatedUser = updatedUserArr.find((u: any) => u[config.idField] === dto.id);
+  const sessionCount = updatedUser?.sessions?.length ?? 0;
+
+  // Update memory_count_used in rate_limit via AdminService
+  try {
+    await this.adminService.setUserMemoryCount(dto.role, dto.id, sessionCount);
+  } catch (err) {
+    console.error("Failed to update memory_count_used after deleteSession:", err);
+  }
 
   return { success: true };
 }
@@ -176,7 +207,6 @@ async addQA(dto: AddQADto) {
     { _id: docId },
     { $pull: { [config.array]: { [config.idField]: dto.id } } as any }
   );
-  console.log("Memory update result:", memResult);
 
   // Remove user from user collection array (students, faculty, etc.)
   const userDocId = new Types.ObjectId("68d3d10671bbe5af3a79a45b");
@@ -185,7 +215,9 @@ async addQA(dto: AddQADto) {
     { _id: userDocId },
     { $pull: { [arrayName]: { [config.idField]: dto.id } } as any }
   );
-  console.log("User collection update result:", userResult);
+
+  // Remove user from rate_limit collection
+  await this.adminService.deleteUserRateLimit(dto.role, dto.id);
 
   return { memResult, userResult, success: true };
 }

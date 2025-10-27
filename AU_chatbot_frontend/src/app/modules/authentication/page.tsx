@@ -9,6 +9,27 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ArrowLeft, Bot } from "lucide-react";
 
+// --- Dialog Component ---
+function Dialog({ open, type, message, onClose }: { open: boolean; type: "error" | "success"; message: string; onClose: () => void }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className={`rounded-xl shadow-lg p-6 min-w-[300px] ${type === "error" ? "bg-red-900 border-red-700" : "bg-green-900 border-green-700"} border`}>
+        <div className="text-lg font-semibold mb-2 text-white flex items-center gap-2">
+          {type === "error" ? (
+            <span className="inline-block bg-red-700 rounded-full w-6 h-6 flex items-center justify-center mr-2">!</span>
+          ) : (
+            <span className="inline-block bg-green-700 rounded-full w-6 h-6 flex items-center justify-center mr-2">&#10003;</span>
+          )}
+          {type === "error" ? "Error" : "Success"}
+        </div>
+        <div className="mb-4 text-white">{message}</div>
+        <Button onClick={onClose} className="bg-white text-black hover:bg-gray-200">Close</Button>
+      </div>
+    </div>
+  );
+}
+
 type Tab = "login" | "signup" | "guest" | "forgot";
 
 export default function AuthenticationModule() {
@@ -19,6 +40,11 @@ export default function AuthenticationModule() {
     { left: number; top: number; duration: number; delay: number }[]
   >([]);
   const [forgotRole, setForgotRole] = useState("student");
+
+  // Dialog state
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogType, setDialogType] = useState<"error" | "success">("success");
+  const [dialogMessage, setDialogMessage] = useState("");
 
   // NEW: Use ref for background blur
   const blurRef = useRef<HTMLDivElement>(null);
@@ -46,8 +72,21 @@ export default function AuthenticationModule() {
     );
   }, []);
 
+  // Handler to show dialog
+  const showDialog = (type: "error" | "success", message: string) => {
+    setDialogType(type);
+    setDialogMessage(message);
+    setDialogOpen(true);
+  };
+
   return (
     <>
+      <Dialog
+        open={dialogOpen}
+        type={dialogType}
+        message={dialogMessage}
+        onClose={() => setDialogOpen(false)}
+      />
       <style jsx global>{`
         @keyframes float {
           0%, 100% { 
@@ -159,10 +198,10 @@ export default function AuthenticationModule() {
                   </TabsList>
                   <div className="bg-white/95 rounded-lg p-4 shadow-inner backdrop-blur-sm border border-white/50">
                     <TabsContent value="login" className="animate-fade-in">
-                      <LoginPage />
+                      <LoginPage showDialog={showDialog} />
                     </TabsContent>
                     <TabsContent value="signup" className="animate-fade-in">
-                      <SignupPage />
+                      <SignupPage showDialog={showDialog} />
                     </TabsContent>
                     <TabsContent value="guest" className="animate-fade-in">
                       <GuestPage />
@@ -189,6 +228,7 @@ export default function AuthenticationModule() {
                   setForgotId("");
                   setShowForgotPopup(false);
                 }}
+                showDialog={showDialog}
               />
             )}
           </div>

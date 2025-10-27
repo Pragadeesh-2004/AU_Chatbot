@@ -51,7 +51,12 @@ const roleOptions = [
   { value: "admin", label: "Admin", idLabel: "Admin ID" },
 ];
 
-export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => void }) {
+type SignupPageProps = {
+  showDialog?: (type: "error" | "success", message: string) => void;
+  onBackToLogin?: () => void;
+};
+
+export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [role, setRole] = useState("student");
   const [id, setId] = useState("");
@@ -70,7 +75,6 @@ export default function SignupPage({ onBackToLogin }: { onBackToLogin?: () => vo
 
   const params = useSearchParams();
   useEffect(() => {
-    // If redirected from verify page with token, go to step 3
     const stepParam = params.get("step");
     const tokenParam = params.get("token");
     if (stepParam === "3" && tokenParam) {
