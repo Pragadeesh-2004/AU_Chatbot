@@ -44,6 +44,23 @@ type ForgotPasswordPageProps = {
 	initialId?: string;
 };
 
+// Add password validation function at the top
+const validatePassword = (password: string): string | null => {
+	if (password.length < 8) {
+		return "Password must be at least 8 characters long";
+	}
+	if (password.length > 64) {
+		return "Password must not exceed 64 characters";
+	}
+	if (/\s/.test(password)) {
+		return "Password cannot contain spaces";
+	}
+	if (!/^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]+$/.test(password)) {
+		return "Password can only contain letters, numbers, and special characters";
+	}
+	return null;
+};
+
 export default function ForgotPasswordPage({
 	showDialog,
 	onBack,
@@ -63,6 +80,8 @@ export default function ForgotPasswordPage({
 	const [showPassword, setShowPassword] = useState(false);
 	const [showConfirm, setShowConfirm] = useState(false);
 	const [info, setInfo] = useState<string | null>(null);
+	const [passwordError, setPasswordError] = useState<string | null>(null); // ✅ Add password error state
+	const [confirmError, setConfirmError] = useState<string | null>(null); // ✅ Add confirm error state
 
 	const idInputRef = useRef<HTMLInputElement>(null);
 	const codeInputRef = useRef<HTMLInputElement>(null);
@@ -167,15 +186,55 @@ export default function ForgotPasswordPage({
 		}
 	};
 
+	// ✅ Add password change handlers with validation
+	const handlePasswordChange = (value: string) => {
+		setPassword(value);
+		setInputError(null);
+
+		if (value.length > 0) {
+			const validationError = validatePassword(value);
+			setPasswordError(validationError);
+		} else {
+			setPasswordError(null);
+		}
+
+		// Check confirm match if confirm field has value
+		if (confirm && value !== confirm) {
+			setConfirmError("Passwords do not match");
+		} else {
+			setConfirmError(null);
+		}
+	};
+
+	const handleConfirmChange = (value: string) => {
+		setConfirm(value);
+		setInputError(null);
+
+		if (value && password && value !== password) {
+			setConfirmError("Passwords do not match");
+		} else {
+			setConfirmError(null);
+		}
+	};
+
 	// --- Step 3: Reset Password ---
 	const handleResetPassword = async () => {
 		setInputError(null);
-		setIsLoading(true);
-		if (password !== confirm) {
-			setInputError("Passwords do not match.");
-			setIsLoading(false);
+
+		// ✅ Validate password before submission
+		const passwordValidation = validatePassword(password);
+		if (passwordValidation) {
+			setInputError(passwordValidation);
 			return;
 		}
+
+		if (password !== confirm) {
+			setInputError("Passwords do not match.");
+			return;
+		}
+
+		setIsLoading(true);
+
 		try {
 			const res = await fetch(`${API_BASE}/authentication/forgot-password/reset`, {
 				method: "POST",
@@ -374,9 +433,11 @@ export default function ForgotPasswordPage({
 									ref={passwordInputRef}
 									type={showPassword ? "text" : "password"}
 									value={password}
-									onChange={(e) => setPassword(e.target.value)}
-									placeholder="Enter password"
-									className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
+									onChange={(e) => handlePasswordChange(e.target.value)} 
+									placeholder="Enter password (8-64 chars, no spaces)"
+									className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
+										passwordError ? "border-red-500" : ""
+									}`}
 								/>
 								<Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
 								<button
@@ -389,6 +450,12 @@ export default function ForgotPasswordPage({
 									{showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
 								</button>
 							</div>
+							{/* ✅ Show password validation error */}
+							{passwordError && (
+								<div className="mt-1 text-red-500 text-xs">
+									{passwordError}
+								</div>
+							)}
 						</div>
 						<div className="mb-6 w-full">
 							<label className="block mb-2 text-blue-900 text-base font-semibold">Confirm Password</label>
@@ -397,9 +464,11 @@ export default function ForgotPasswordPage({
 									ref={confirmInputRef}
 									type={showConfirm ? "text" : "password"}
 									value={confirm}
-									onChange={(e) => setConfirm(e.target.value)}
+									onChange={(e) => handleConfirmChange(e.target.value)} 
 									placeholder="Confirm password"
-									className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
+									className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
+										confirmError ? "border-red-500" : ""
+									}`}
 								/>
 								<Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
 								<button
@@ -412,18 +481,21 @@ export default function ForgotPasswordPage({
 									{showConfirm ? <EyeOff size={20} /> : <Eye size={20} />}
 								</button>
 							</div>
+							{/* ✅ Show confirm validation error */}
+							{confirmError && (
+								<div className="mt-1 text-red-500 text-xs">
+									{confirmError}
+								</div>
+							)}
 						</div>
 						<Button
 							type="button"
 							className="bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 mb-2 w-full h-12 text-lg"
 							onClick={handleResetPassword}
-							disabled={!password || !confirm || password !== confirm}
+							disabled={!password || !confirm || !!passwordError || !!confirmError} 
 						>
 							Reset Password
 						</Button>
-						{password && confirm && password !== confirm && (
-							<div className="text-red-500 mt-2 text-sm">Passwords do not match.</div>
-						)}
 						{inputError && <div className="text-red-500 mt-2 text-sm">{inputError}</div>}
 					</div>
 				</Card>

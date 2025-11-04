@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Delete, Get, Query, UploadedFiles, UseInterceptors } from "@nestjs/common";
+import { Controller, Post, Body, Delete, Get, Query, UploadedFiles, UseInterceptors, HttpException, HttpStatus } from "@nestjs/common";
 import { ChatbotService } from "./chatbot.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { AddSessionDto } from "./dto/add-session.dto";
@@ -19,23 +19,45 @@ export class ChatbotController {
 
     @Post("add-session")
     async addSession(@Body() dto: AddSessionDto) {
-        return this.chatbotService.addSession(dto);
+        const result = await this.chatbotService.addSession(dto);
+        const resAny = result as any;
+        if (resAny?.error) {
+            if (resAny.code === 'MEMORY_LIMIT_EXCEEDED') {
+                throw new HttpException({ message: resAny.error, code: resAny.code }, HttpStatus.BAD_REQUEST);
+            }
+            throw new HttpException({ message: resAny.error }, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        return { session_id: (resAny?.session_id ?? null) };
     }
 
     @Post("add-qa")
     async addQA(@Body() dto: AddQADto) {
-        console.log("addQA DTO:", dto);
-        return this.chatbotService.addQA(dto);
+        const result = await this.chatbotService.addQA(dto);
+        const resAny = result as any;
+        if (resAny?.error) {
+            throw new HttpException({ message: resAny.error }, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        return result;
     }
 
     @Delete("delete-session")
     async deleteSession(@Body() dto: DeleteSessionDto) {
-        return this.chatbotService.deleteSession(dto);
+        const result = await this.chatbotService.deleteSession(dto);
+        const resAny = result as any;
+        if (resAny?.error) {
+            throw new HttpException({ message: resAny.error }, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        return result;
     }
 
     @Delete("delete-user")
     async deleteUser(@Body() dto: DeleteUserDto) {
-        return this.chatbotService.deleteUser(dto);
+        const result = await this.chatbotService.deleteUser(dto);
+        const resAny = result as any;
+        if (resAny?.error) {
+            throw new HttpException({ message: resAny.error }, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+        return result;
     }
 
     @Get("user-memory")
@@ -53,10 +75,6 @@ export class ChatbotController {
     @Post("send-prompt")
     @UseInterceptors(AnyFilesInterceptor())
     async sendPrompt(@UploadedFiles() files: MulterFile[], @Body() body: any) {
-        // Validate file types and sizes using process.env values
-        // Do not save files, just process them as needed
-        // You can access files and images via `files`
-        // Access prompt via `body.question`
         return { success: true, files: files.map(f => f.originalname) };
     }
 }

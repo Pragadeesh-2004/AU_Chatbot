@@ -1,8 +1,8 @@
-import { IsString } from 'class-validator';
+import { IsString, IsOptional, IsArray } from "class-validator";
 
 export class AddQADto {
   @IsString()
-  role: "student" | "faculty" | "scholar" | "official";
+  role: string;
 
   @IsString()
   id: string;
@@ -13,9 +13,19 @@ export class AddQADto {
   @IsString()
   question: string;
 
+  @IsOptional()
   @IsString()
-  answer: string;
+  answer?: string;
 
+  @IsOptional()
   @IsString()
-  timestamp: string;
+  timestamp?: string;
+
+  @IsOptional()
+  @IsString()
+  session_name?: string;
+
+  @IsOptional()
+  @IsArray()
+  files?: Array<{ name: string; size: number; type: string }>; // File metadata
 }

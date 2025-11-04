@@ -10,7 +10,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { User, Lock, Eye, EyeOff } from "lucide-react";
+import { User, Lock, Eye, EyeOff, GraduationCap } from "lucide-react";
 
 const roleOptions = [
   { value: "admin", label: "Admin", idLabel: "Admin ID" },
@@ -20,31 +20,73 @@ const roleOptions = [
   { value: "student", label: "Student", idLabel: "Roll No" },
 ];
 
+const collegeOptions = [
+  { value: "Anna_university", label: "Anna University" },
+];
+
 type LoginPageProps = {
   showDialog?: (type: "error" | "success", message: string) => void;
 };
 
 export default function LoginPage({ showDialog }: LoginPageProps) {
   const router = useRouter();
+  const [college, setCollege] = useState("Anna_university");
   const [role, setRole] = useState("student");
   const [id, setId] = useState("");
   const [password, setPassword] = useState("");
   const [showMsg, setShowMsg] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const currentRole = roleOptions.find(r => r.value === role);
+
+  const validatePassword = (password: string): string | null => {
+    if (password.length < 8) {
+      return "Password must be at least 8 characters long";
+    }
+    if (password.length > 64) {
+      return "Password must not exceed 64 characters";
+    }
+    if (/\s/.test(password)) {
+      return "Password cannot contain spaces";
+    }
+    if (!/^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]+$/.test(password)) {
+      return "Password can only contain letters, numbers, and special characters";
+    }
+    return null;
+  };
+
+  const handlePasswordChange = (value: string) => {
+    setPassword(value);
+    setError(null);
+    
+    if (value.length > 0) {
+      const validationError = validatePassword(value);
+      setPasswordError(validationError);
+    } else {
+      setPasswordError(null);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setPasswordError(null);
+
+    const passwordValidation = validatePassword(password);
+    if (passwordValidation) {
+      setPasswordError(passwordValidation);
+      return;
+    }
+
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/authentication/login`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role, id, password }),
+          body: JSON.stringify({ college, role, id, password }),
         }
       );
       
@@ -52,47 +94,42 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
         let data: any = {};
         try {
           const responseText = await res.text();
-          console.log("Backend response:", responseText); // Debug: see what backend actually sends
+          console.log("Backend response:", responseText);
           data = JSON.parse(responseText);
-          console.log("Parsed data:", data); // Debug: see parsed object
-          console.log("Message field:", data.message, typeof data.message); // Debug: check message field
+          console.log("Parsed data:", data);
+          console.log("Message field:", data.message, typeof data.message);
         } catch (parseErr) {
           console.error("JSON parse error:", parseErr);
           setError("Unable to connect to server");
           return;
         }
         
-        // Extract ONLY the message string from backend JSON
         let errorMessage = "Login failed";
         
         if (data && data.message) {
-          // Ensure we get a clean string, not an object
           if (typeof data.message === "string") {
             errorMessage = data.message.message;
           } else if (typeof data.message === "object") {
-            // If somehow message is an object, stringify it
             errorMessage = String(JSON.stringify(data.message.message));
           } else {
-            // Convert any other type to string
             errorMessage = String(data.message.message);
           }
         } else if (data && data.error && typeof data.error === "string" && data.error !== "Bad Request") {
           errorMessage = data.error;
         }
         
-        console.log("Final error message to display:", errorMessage); // Debug: see what will be shown
+        console.log("Final error message to display:", errorMessage);
         setError(errorMessage);
         return;
       }
       
-      // Success case
       const data = await res.json();
       console.log("Login successful:", data);
 
-      // Store user info in localStorage
       localStorage.setItem("userName", data.user.name || "Guest");
       localStorage.setItem("userRole", role);
       localStorage.setItem("userId", id);
+      localStorage.setItem("userCollege", college);
 
       router.push("/modules/chatbot");
     } catch (err: any) {
@@ -104,8 +141,25 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
   return (
     <form
       onSubmit={handleLogin}
-      className="space-y-4 min-h-[350px] flex flex-col justify-center"
+      className="space-y-4 min-h-[400px] flex flex-col justify-center"
     >
+      <div>
+        <label className="block mb-2 text-blue-900 text-sm font-semibold">College</label>
+        <div className="relative">
+          <Select value={college} onValueChange={setCollege}>
+            <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
+              <SelectValue placeholder="Select college" />
+            </SelectTrigger>
+            <SelectContent className="bg-white text-blue-900 border-blue-400">
+              {collegeOptions.map(opt => (
+                <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          </div>
+      </div>
       <div>
         <label className="block mb-2 text-blue-900 text-sm font-semibold">Role</label>
         <Select value={role} onValueChange={setRole}>
@@ -144,9 +198,11 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
           <Input
             type={showPassword ? "text" : "password"}
             value={password}
-            onChange={e => setPassword(e.target.value)}
+            onChange={e => handlePasswordChange(e.target.value)}
             placeholder="Enter your password"
-            className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
+            className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
+              passwordError ? "border-red-500" : ""
+            }`}
             autoComplete="current-password"
           />
           <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
@@ -159,10 +215,16 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
             {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
+        {passwordError && (
+          <div className="mt-1 text-red-600 text-xs">
+            {passwordError}
+          </div>
+        )}
       </div>
       <Button
         type="submit"
         className="w-full bg-gradient-to-r from-blue-700 to-blue-500 text-white hover:from-blue-800 hover:to-cyan-500 h-10 text-sm font-bold rounded-lg transition-all duration-300 hover:scale-105"
+        disabled={!!passwordError}
       >
         Login
       </Button>

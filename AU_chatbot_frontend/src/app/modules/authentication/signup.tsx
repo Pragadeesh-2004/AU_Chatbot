@@ -9,7 +9,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { User, ArrowLeft, Mail, Lock, Eye, EyeOff } from "lucide-react";
+import { User, ArrowLeft, Mail, Lock, Eye, EyeOff, GraduationCap } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 // --- API utility in this file ---
@@ -51,13 +51,35 @@ const roleOptions = [
   { value: "admin", label: "Admin", idLabel: "Admin ID" },
 ];
 
+const collegeOptions = [
+  { value: "Anna_university", label: "Anna University" },
+];
+
 type SignupPageProps = {
   showDialog?: (type: "error" | "success", message: string) => void;
   onBackToLogin?: () => void;
 };
 
+// Add password validation function at the top
+const validatePassword = (password: string): string | null => {
+  if (password.length < 8) {
+    return "Password must be at least 8 characters long";
+  }
+  if (password.length > 64) {
+    return "Password must not exceed 64 characters";
+  }
+  if (/\s/.test(password)) {
+    return "Password cannot contain spaces";
+  }
+  if (!/^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`]+$/.test(password)) {
+    return "Password can only contain letters, numbers, and special characters";
+  }
+  return null;
+};
+
 export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProps) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [college, setCollege] = useState("Anna_university");
   const [role, setRole] = useState("student");
   const [id, setId] = useState("");
   const [emailSent, setEmailSent] = useState(false);
@@ -72,6 +94,8 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
   const [resendCount, setResendCount] = useState(0);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
 
   const params = useSearchParams();
   useEffect(() => {
@@ -91,7 +115,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
     setInputError(null);
     setIsLoading(true);
     try {
-      const response = await apiPost("signup", { role, id });
+      const response = await apiPost("signup", { college, role, id });
       setEmailSent(true);
       setStep(2);
     } catch (e: any) {
@@ -115,7 +139,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
   const handleVerifyCode = async () => {
     setCodeError(null);
     try {
-      await apiPost("verify-code", { role, id, code });
+      await apiPost("verify-code", { college, role, id, code });
       // Move to password step
       setStep(3);
     } catch (e: any) {
@@ -123,50 +147,92 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
     }
   };
 
+  // ✅ Add password change handlers with validation
+  const handlePasswordChange = (value: string) => {
+    setPassword(value);
+    setInputError(null);
+    
+    if (value.length > 0) {
+      const validationError = validatePassword(value);
+      setPasswordError(validationError);
+    } else {
+      setPasswordError(null);
+    }
+
+    // Check confirm match if confirm field has value
+    if (confirm && value !== confirm) {
+      setConfirmError("Passwords do not match");
+    } else {
+      setConfirmError(null);
+    }
+  };
+
+  const handleConfirmChange = (value: string) => {
+    setConfirm(value);
+    setInputError(null);
+    
+    if (value && password && value !== password) {
+      setConfirmError("Passwords do not match");
+    } else {
+      setConfirmError(null);
+    }
+  };
+
   // Step 3: Complete signup with token from URL
   const handleCompleteSignup = async () => {
-  try {
-    const useToken = token || btoa(`${role}:${id}:${Date.now()}`);
-
-    // Step 1: Verify token and password
-    const response = await apiPost("verify", { token: useToken, password });
-
-    const userName = response?.name || "";
-
-    // Step 2: Create memory for the user
-    const memRes = await fetch(`${API_BASE}/chatbot/add-user`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role, id, name: userName }) // Remove 'sessions' if backend does not accept it
-    });
-
-    if (!memRes.ok) {
-      const err = await memRes.json().catch(() => ({}));
-      console.error("Memory creation failed:", err);
-      window.alert(
-        "Signup succeeded but memory creation failed: " +
-          (err.message || memRes.statusText)
-      );
+    // ✅ Validate password before submission
+    const passwordValidation = validatePassword(password);
+    if (passwordValidation) {
+      window.alert(passwordValidation);
       return;
     }
 
-    // Step 3: Success
-    window.alert(`Signup complete for ${userName || "your account"}! You can now login.`);
-    setStep(1);
-    setId("");
-    setPassword("");
-    setConfirm("");
-    setEmailSent(false);
-    setVerified(false);
-    setInputError(null);
-    if (onBackToLogin) onBackToLogin();
-    else window.location.href = "/modules/authentication";
+    if (password !== confirm) {
+      window.alert("Passwords do not match.");
+      return;
+    }
 
-  } catch (e: any) {
-    window.alert(e.message || "Failed to complete signup");
-  }
-};
+    try {
+      const useToken = token || btoa(`${role}:${id}:${Date.now()}`);
 
+      // Step 1: Verify token and password
+      const response = await apiPost("verify", { token: useToken, password, college });
+
+      const userName = response?.name || "";
+
+      // Step 2: Create memory for the user
+      const memRes = await fetch(`${API_BASE}/chatbot/add-user`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ college, role, id, name: userName })
+      });
+
+      if (!memRes.ok) {
+        const err = await memRes.json().catch(() => ({}));
+        console.error("Memory creation failed:", err);
+        window.alert(
+          "Signup succeeded but memory creation failed: " +
+            (err.message || memRes.statusText)
+        );
+        return;
+      }
+
+      // Step 3: Success
+      window.alert(`Signup complete for ${userName || "your account"}! You can now login.`);
+      setStep(1);
+      setId("");
+      setPassword("");
+      setConfirm("");
+      setEmailSent(false);
+      setVerified(false);
+      setInputError(null);
+      if (onBackToLogin) onBackToLogin();
+      else window.location.href = "/modules/authentication";
+
+    } catch (e: any) {
+      window.alert(e.message || "Failed to complete signup");
+    }
+  };
 
   const handleBack = () => {
     setStep(1);
@@ -181,9 +247,27 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
 
   return (
     <>
-      {/* Step 1: Role, ID, Send Verification */}
+      {/* Step 1: College, Role, ID, Send Verification */}
       {step === 1 && (
         <>
+          <div>
+            <label className="block mb-2 text-blue-900 text-sm font-semibold">College</label>
+            <div className="relative">
+              <Select value={college} onValueChange={setCollege}>
+                <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
+                  <SelectValue placeholder="Select college" />
+                </SelectTrigger>
+                <SelectContent className="bg-white text-blue-900 border-blue-400">
+                  {collegeOptions.map(opt => (
+                    <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+             
+            </div>
+          </div>
           <div>
             <label className="block mb-2 text-blue-900 text-sm font-semibold">Role</label>
             <Select value={role} onValueChange={value => { setRole(value); setId(""); setInputError(null); }}>
@@ -327,9 +411,11 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
                 <Input
                   type={showPassword ? "text" : "password"}
                   value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="Enter password"
-                  className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
+                  onChange={e => handlePasswordChange(e.target.value)} 
+                  placeholder="Enter password (8-64 chars, no spaces)"
+                  className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
+                    passwordError ? "border-red-500" : ""
+                  }`}
                 />
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
                 <button
@@ -342,6 +428,12 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
                   {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
               </div>
+              {/* ✅ Show password validation error */}
+              {passwordError && (
+                <div className="mt-1 text-red-500 text-xs">
+                  {passwordError}
+                </div>
+              )}
             </div>
             <div className="mb-6 w-full">
               <label className="block mb-2 text-blue-900 text-base font-semibold">Confirm Password</label>
@@ -349,9 +441,11 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
                 <Input
                   type={showConfirm ? "text" : "password"}
                   value={confirm}
-                  onChange={e => setConfirm(e.target.value)}
+                  onChange={e => handleConfirmChange(e.target.value)} 
                   placeholder="Confirm password"
-                  className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
+                  className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
+                    confirmError ? "border-red-500" : ""
+                  }`}
                 />
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
                 <button
@@ -364,18 +458,21 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
                   {showConfirm ? <EyeOff size={20} /> : <Eye size={20} />}
                 </button>
               </div>
+              {/* ✅ Show confirm validation error */}
+              {confirmError && (
+                <div className="mt-1 text-red-500 text-xs">
+                  {confirmError}
+                </div>
+              )}
             </div>
             <Button
               type="button"
               className="bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 mb-2 w-full h-12 text-lg"
               onClick={handleCompleteSignup}
-              disabled={!password || !confirm || password !== confirm}
+              disabled={!password || !confirm || !!passwordError || !!confirmError} 
             >
               Complete Signup
             </Button>
-            {password && confirm && password !== confirm && (
-              <div className="text-red-500 mt-2 text-sm">Passwords do not match.</div>
-            )}
           </div>
         </>
       )}

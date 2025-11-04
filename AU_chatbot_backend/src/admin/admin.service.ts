@@ -174,66 +174,78 @@ export class AdminService {
 
     // Get default limits for this role
     const defaultLimits = await this.getRateLimit(role);
-    
     const docId = new Types.ObjectId(config.docId);
-    
-    // Check if user already exists
+
+    // Fetch document
     const doc = await this.universityConnection
       .collection('rate_limit')
       .findOne({ _id: docId });
 
-    const userArray = doc?.[config.arrayField] || [];
-    const existingUser = userArray.find((user: any) => user[config.idField] === userId);
+    // If document does not exist, create it with defaults and the new user in the array
+    if (!doc) {
+      const newDoc: any = {
+        _id: docId,
+        request_per_day: defaultLimits.request_per_day,
+        input_token_per_day: defaultLimits.input_token_per_day,
+        output_token_per_day: defaultLimits.output_token_per_day,
+        file_count: defaultLimits.file_count,
+        file_size: defaultLimits.file_size,
+        memory_count: defaultLimits.memory_count,
+        [config.arrayField]: [
+          {
+            [config.idField]: userId,
+            name,
+            balance_request_per_day: defaultLimits.request_per_day,
+            balance_input_token_per_day: defaultLimits.input_token_per_day,
+            balance_output_token_per_day: defaultLimits.output_token_per_day,
+            balance_file_count: defaultLimits.file_count,
+            memory_count_used: 0,
+            last_reset: new Date()
+          }
+        ]
+      };
+      await this.universityConnection.collection('rate_limit').insertOne(newDoc);
+      return newDoc[config.arrayField][0];
+    }
 
+    // Document exists: ensure array exists
+    const userArray = Array.isArray(doc[config.arrayField]) ? doc[config.arrayField] : [];
+
+    // Try to find existing user
+    const existingUser = userArray.find((u: any) => u[config.idField] === userId);
     if (existingUser) {
-      // Check if daily reset is needed
+      // If user's last_reset is older than today, reset their balances
       const lastReset = new Date(existingUser.last_reset || 0);
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      
-      if (lastReset < today) {
-        // Reset daily limits
+      const today = new Date();
+      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      if (lastReset < todayStart) {
         await this.resetUserDailyLimits(role, userId);
+        // re-fetch and return updated user
+        const updatedDoc = await this.universityConnection.collection('rate_limit').findOne({ _id: docId });
+        const updatedArray = Array.isArray(updatedDoc?.[config.arrayField]) ? updatedDoc[config.arrayField] : [];
+        return updatedArray.find((u: any) => u[config.idField] === userId) ?? existingUser;
       }
-      
       return existingUser;
     }
 
-    // Create new user entry
-    const newUser: UserRateLimit = {
+    // User not found -> push new user entry
+    const newUser: any = {
       [config.idField]: userId,
       name,
       balance_request_per_day: defaultLimits.request_per_day,
-      balance_input_token_per_day: defaultLimits.input_token_per_day,   // changed
-      balance_output_token_per_day: defaultLimits.output_token_per_day, // changed
+      balance_input_token_per_day: defaultLimits.input_token_per_day,
+      balance_output_token_per_day: defaultLimits.output_token_per_day,
       balance_file_count: defaultLimits.file_count,
       memory_count_used: 0,
       last_reset: new Date()
     };
 
-    // Fix: Create the push operation object properly
-    const pushOperation = {};
-    pushOperation[config.arrayField] = newUser;
-
-    const setOnInsertOperation = {
-      request_per_day: defaultLimits.request_per_day,
-      input_token_per_day: defaultLimits.input_token_per_day,
-      output_token_per_day: defaultLimits.output_token_per_day,
-      file_count: defaultLimits.file_count,
-      file_size: defaultLimits.file_size,
-      memory_count: defaultLimits.memory_count
-    };
-
-    await this.universityConnection
-      .collection('rate_limit')
-      .updateOne(
-        { _id: docId },
-        { 
-          $push: pushOperation,
-          $setOnInsert: setOnInsertOperation
-        },
-        { upsert: true }
-      );
+    const pushUpdate: any = { $push: { [config.arrayField]: newUser } };
+    await this.universityConnection.collection('rate_limit').updateOne(
+      { _id: docId },
+      pushUpdate
+    );
+    
 
     return newUser;
   }
@@ -361,30 +373,31 @@ export class AdminService {
   // Reset all users' daily limits (only balances, not overall document values)
   private async resetAllUserLimits(): Promise<void> {
     try {
-      for (const role of Object.keys(ROLE_CONFIG)) {
-        const config = ROLE_CONFIG[role];
+      for (const roleKey of Object.keys(ROLE_CONFIG)) {
+        const config = ROLE_CONFIG[roleKey];
         const docId = new Types.ObjectId(config.docId);
-        const defaultLimits = await this.getRateLimit(role);
+        const defaultLimits = await this.getRateLimit(roleKey);
 
-        // Fetch the document to get the user array
         const doc = await this.universityConnection
           .collection('rate_limit')
           .findOne({ _id: docId });
 
-        if (!doc || !doc[config.arrayField] || !Array.isArray(doc[config.arrayField])) continue;
+        if (!doc) continue;
 
-        // Update each user in the array with the admin-set limits
-        const updatedUsers = doc[config.arrayField].map((user: any) => ({
+        const userArray = Array.isArray(doc[config.arrayField]) ? doc[config.arrayField] : [];
+
+        // Map users to updated balances (preserve other user fields)
+        const updatedUsers = userArray.map((user: any) => ({
           ...user,
           balance_request_per_day: defaultLimits.request_per_day,
           balance_input_token_per_day: defaultLimits.input_token_per_day,
           balance_output_token_per_day: defaultLimits.output_token_per_day,
           balance_file_count: defaultLimits.file_count,
-          memory_count_used: user.memory_count_used ?? 0, // preserve user's memory usage
+          memory_count_used: user.memory_count_used ?? 0,
           last_reset: new Date()
         }));
 
-        // Write the updated array back to the document
+        // Write only the array field back (preserve other doc-level fields)
         await this.universityConnection
           .collection('rate_limit')
           .updateOne(
@@ -421,5 +434,82 @@ export class AdminService {
         { _id: docId, [`${config.arrayField}.${config.idField}`]: userId },
         { $set: { [`${config.arrayField}.$.memory_count_used`]: count } }
       );
+  }
+
+  /**
+   * Adjust user's balance tokens (deduct amounts). Ensures values don't go negative.
+   * inputDeduct / outputDeduct are numbers (tokens to subtract)
+   */
+  async adjustUserTokens(role: string, userId: string, inputDeduct = 0, outputDeduct = 0) {
+    const config = ROLE_CONFIG[role];
+    if (!config) throw new Error("Invalid role");
+    const docId = new Types.ObjectId(config.docId);
+    const collection = this.universityConnection.collection("rate_limit");
+
+    const doc = await collection.findOne({ _id: docId });
+    if (!doc) return null;
+
+    const users = (doc[config.arrayField] as any[]) ?? [];
+    const user = users.find(u => u?.[config.idField] === userId);
+    if (!user) return null;
+
+    const newInput = Math.max(0, (user.balance_input_token_per_day ?? 0) - inputDeduct);
+    const newOutput = Math.max(0, (user.balance_output_token_per_day ?? 0) - outputDeduct);
+
+    await collection.updateOne(
+      { _id: docId, [`${config.arrayField}.${config.idField}`]: userId },
+      {
+        $set: {
+          [`${config.arrayField}.$.balance_input_token_per_day`]: newInput,
+          [`${config.arrayField}.$.balance_output_token_per_day`]: newOutput
+        }
+      }
+    );
+
+    return { balance_input_token_per_day: newInput, balance_output_token_per_day: newOutput };
+  }
+
+  // Adjust user request count (decrease balance_request_per_day)
+  async adjustUserRequests(role: string, userId: string, requestsUsed: number): Promise<void> {
+    const config = ROLE_CONFIG[role];
+    if (!config) throw new Error('Invalid role');
+
+    const docId = new Types.ObjectId(config.docId);
+    
+    const updateOp: any = {
+      $inc: {
+        [`${config.arrayField}.$[user].balance_request_per_day`]: -requestsUsed
+      }
+    };
+
+    await this.universityConnection.collection('rate_limit').updateOne(
+      { _id: docId },
+      updateOp,
+      {
+        arrayFilters: [{ [`user.${config.idField}`]: userId }]
+      }
+    );
+  }
+
+  // Adjust user file count (decrease balance_file_count when files are uploaded)
+  async adjustUserFileCount(role: string, userId: string, filesUsed: number): Promise<void> {
+    const config = ROLE_CONFIG[role];
+    if (!config) throw new Error('Invalid role');
+
+    const docId = new Types.ObjectId(config.docId);
+    
+    const updateOp: any = {
+      $inc: {
+        [`${config.arrayField}.$[user].balance_file_count`]: -filesUsed
+      }
+    };
+
+    await this.universityConnection.collection('rate_limit').updateOne(
+      { _id: docId },
+      updateOp,
+      {
+        arrayFilters: [{ [`user.${config.idField}`]: userId }]
+      }
+    );
   }
 }
