@@ -142,6 +142,11 @@ export default function ChatbotPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [input, setInput] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  // Confirmation dialog state for deleting a session from profile
+  const [deleteSessionDialogOpen, setDeleteSessionDialogOpen] = useState(false);
+  const [sessionToDelete, setSessionToDelete] = useState<string | null>(null);
+  // Confirmation dialog state for logout
+  const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [alertDialogMessage, setAlertDialogMessage] = useState("");
   const [showUploadOptions, setShowUploadOptions] = useState(false);
@@ -807,8 +812,8 @@ export default function ChatbotPage() {
                 <History size={16} className="inline-block mr-1" /> Chats
               </div>
               {filteredSessions.length === 0 && <div className="text-cyan-300 text-xs">No chats found.</div>}
-              {filteredSessions.map((session: any) => (
-                <div key={session.session_id}
+              {filteredSessions.map((session: any, idx: number) => (
+                <div key={`${session.session_id}-${idx}`}
                   className={`flex items-center group px-2 py-2 rounded-lg cursor-pointer mb-1 transition-colors hover:bg-blue-900/80 ${selectedSession === session.session_id ? "bg-cyan-800/80" : ""}`}
                   onClick={() => {
                     setSelectedSession(session.session_id);
@@ -855,8 +860,8 @@ export default function ChatbotPage() {
               <History size={16} className="inline-block mr-1" /> Chats
             </div>
             {userMemory?.sessions?.length === 0 && <div className="text-cyan-300 text-xs">No chats found.</div>}
-            {userMemory?.sessions?.map((session: any) => (
-              <div key={session.session_id}
+            {userMemory?.sessions?.map((session: any, idx: number) => (
+              <div key={`${session.session_id}-${idx}`}
                 className={`flex items-center group px-2 py-2 rounded-lg cursor-pointer mb-1 transition-colors hover:bg-blue-900/80 ${selectedSession === session.session_id ? "bg-cyan-800/80" : ""}`}
                 onClick={() => {
                   setSelectedSession(session.session_id);
@@ -867,8 +872,16 @@ export default function ChatbotPage() {
                 <div className="flex-1 ml-2">
                   <div className="text-cyan-100 text-sm font-medium truncate">{session.session_name}</div>
                 </div>
-                <Button variant="ghost" size="icon" className="text-red-400 hover:bg-blue-900 ml-2"
-                  onClick={e => { e.stopPropagation(); handleDeleteChat(session.session_id); }}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-red-400 hover:bg-blue-900 ml-2"
+                  onClick={e => {
+                    e.stopPropagation();
+                    if (user.role === "guest") return;
+                    setSessionToDelete(session.session_id);
+                    setDeleteSessionDialogOpen(true);
+                  }}
                   disabled={user.role === "guest"}
                 >
                   <Trash2 size={16} />
@@ -880,7 +893,7 @@ export default function ChatbotPage() {
             <Button
               variant="ghost"
               className="text-cyan-200 hover:bg-blue-900 flex items-center gap-2 justify-start"
-              onClick={handleLogout}
+              onClick={() => setLogoutDialogOpen(true)}
             >
               <LogOut size={18}/> Logout
             </Button>
@@ -1218,6 +1231,75 @@ export default function ChatbotPage() {
             >
               OK
             </AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirm Delete Session (from profile) */}
+      <AlertDialog open={deleteSessionDialogOpen} onOpenChange={(v) => { if (!v) { setSessionToDelete(null); } setDeleteSessionDialogOpen(v); }}>
+        <AlertDialogContent className="bg-gradient-to-br from-blue-950 to-blue-900 border border-blue-800 text-cyan-100 shadow-2xl max-w-md mx-4 z-[9999]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-xl font-semibold text-amber-400 mb-2">
+              Delete Chat?
+            </AlertDialogTitle>
+          </AlertDialogHeader>
+          <div className="py-2 text-cyan-200 leading-relaxed">
+            Are you sure you want to permanently delete this chat? This action cannot be undone.
+          </div>
+          <AlertDialogFooter className="mt-4 flex gap-2">
+            <AlertDialogCancel
+              className="bg-gradient-to-r from-blue-800 to-blue-700 text-cyan-100 border border-blue-600 hover:from-blue-700 hover:to-blue-600 hover:text-white transition-all duration-200 px-6 py-2 rounded-lg font-medium"
+              onClick={() => {
+                setDeleteSessionDialogOpen(false);
+                setSessionToDelete(null);
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              variant="destructive"
+              className="bg-red-600 text-white hover:bg-red-700 px-6 py-2 rounded-lg"
+              onClick={() => {
+                const id = sessionToDelete;
+                setDeleteSessionDialogOpen(false);
+                setSessionToDelete(null);
+                if (id) handleDeleteChat(id);
+              }}
+            >
+              Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirm Logout */}
+      <AlertDialog open={logoutDialogOpen} onOpenChange={setLogoutDialogOpen}>
+        <AlertDialogContent className="bg-gradient-to-br from-blue-950 to-blue-900 border border-blue-800 text-cyan-100 shadow-2xl max-w-md mx-4 z-[9999]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-xl font-semibold text-amber-400 mb-2">
+              Confirm Logout
+            </AlertDialogTitle>
+          </AlertDialogHeader>
+          <div className="py-2 text-cyan-200 leading-relaxed">
+            Are you sure you want to logout? You will be returned to the login screen.
+          </div>
+          <AlertDialogFooter className="mt-4 flex gap-2">
+            <AlertDialogCancel
+              className="bg-gradient-to-r from-blue-800 to-blue-700 text-cyan-100 border border-blue-600 hover:from-blue-700 hover:to-blue-600 hover:text-white transition-all duration-200 px-6 py-2 rounded-lg font-medium"
+              onClick={() => setLogoutDialogOpen(false)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              variant="destructive"
+              className="bg-red-600 text-white hover:bg-red-700 px-6 py-2 rounded-lg"
+              onClick={() => {
+                setLogoutDialogOpen(false);
+                handleLogout();
+              }}
+            >
+              Logout
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

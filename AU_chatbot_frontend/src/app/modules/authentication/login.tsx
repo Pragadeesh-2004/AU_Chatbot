@@ -11,6 +11,7 @@ import {
   SelectItem,
 } from "@/components/ui/select";
 import { User, Lock, Eye, EyeOff, GraduationCap } from "lucide-react";
+import ClientOnly from "@/components/ClientOnly";
 
 const roleOptions = [
   { value: "admin", label: "Admin", idLabel: "Admin ID" },
@@ -193,7 +194,7 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
   `;
 
   return (
-    <>
+    <ClientOnly>
       {/* global styles to hide native password clear/reveal so only the custom eye icon shows */}
       <style jsx global>{nativeInputHideStyles}</style>
 
@@ -297,6 +298,6 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
           </div>
         )}
       </form>
-    </>
+    </ClientOnly>
   );
 }
