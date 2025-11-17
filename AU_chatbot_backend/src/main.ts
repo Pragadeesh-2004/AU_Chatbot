@@ -1,38 +1,31 @@
 require('dotenv').config();
 
+import * as cookieParser from 'cookie-parser';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
-import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app.use(cookieParser());
 
-  // Enable CORS for frontend on port 3001
+  // Allow multiple origins configured via FRONTEND_ORIGINS env (comma-separated).
+  // Example: FRONTEND_ORIGINS="http://localhost:3000,https://<your-preview>.app.github.dev:3001"
+  const raw = process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || '';
+  const allowedOrigins = raw.split(',').map(s => s.trim()).filter(Boolean);
+  console.log('Allowed frontend origins:', allowedOrigins);
+
   app.enableCors({
-    origin: 'https://ominous-doodle-g459qvv9r7j4f97wx-3001.app.github.dev', // your Next.js frontend
-    credentials: true,               // optional if you need cookies later
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true); // allow backend tools
+      console.log('CORS incoming origin:', origin);
+      if (allowedOrigins.length === 0) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      console.warn('CORS denied origin:', origin);
+      return callback(new Error(`CORS origin denied: ${origin}`));
+    },
+    credentials: true,
   });
-
-  // Static assets & EJS (if needed)
-  app.useStaticAssets(join(__dirname, '..', 'public'));
-  app.setBaseViewsDir(join(__dirname, '..', 'views'));
-  app.setViewEngine('ejs');
-
-  // Global pipes
-  app.useGlobalPipes(
-    new ValidationPipe({
-      transform: true,
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transformOptions: { enableImplicitConversion: true },
-    }),
-  );
-
-  // Global exception filter
-  app.useGlobalFilters(new AllExceptionsFilter());
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

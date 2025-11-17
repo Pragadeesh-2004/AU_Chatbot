@@ -14,11 +14,12 @@ import {
   Plus,
   X as XIcon,
   Upload,
-  Image as ImageIcon,
   Send,
   X,
   Loader2,
-  ArrowLeft  // ✅ Add ArrowLeft icon
+  ArrowLeft,
+  Copy,
+  Check
 } from "lucide-react";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogFooter, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -30,6 +31,7 @@ import {
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
 import dynamic from "next/dynamic";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000";
 const GuestChatPage = dynamic(() => import("./guest-chat"), { ssr: false });
@@ -143,19 +145,16 @@ export default function ChatbotPage() {
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [alertDialogMessage, setAlertDialogMessage] = useState("");
   const [showUploadOptions, setShowUploadOptions] = useState(false);
+  // ✅ Remove selectedImages state - only keep selectedFiles for PDFs
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [selectedImages, setSelectedImages] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // ✅ Add copy state management
+  const [copiedItems, setCopiedItems] = useState<{[key: string]: boolean}>({});
 
-  // Remove hardcoded constants - we'll get these from userMemory
-  // const MAX_FILE_COUNT = 3;
-  // const MAX_FILE_SIZE_MB = 5;
-  const SUPPORTED_FILE_TYPES = [".pdf", ".docx", ".txt"];
-  const SUPPORTED_IMAGE_TYPES = ["image/jpeg", "image/png"];
-
-  const [tokenErrorMsg, setTokenErrorMsg] = useState<string>("");
+  // ✅ Update file types - only PDF support
+  const SUPPORTED_FILE_TYPES = [".pdf", "application/pdf"];
 
   // helper: 1 token = 4 characters
   const calcTokens = (text = "") => Math.ceil((text || "").length / 4);
@@ -200,11 +199,6 @@ export default function ChatbotPage() {
 
   const balances = useMemo(() => getBalances(), [userMemory]);
 
-  // clear token error when user types or balances change
-  useEffect(() => {
-    setTokenErrorMsg("");
-  }, [input, balances.input, balances.output, balances.requests]);
-
   const formatLimitError = (type: "input" | "output" | "request" | "file_count" | "file_size", needed: number, balance: number, fileName?: string) => {
     if (type === "request") {
       return `Request limit exhausted. You have ${balance} requests remaining. Balances reset daily at 12:00 AM.`;
@@ -217,6 +211,25 @@ export default function ChatbotPage() {
     }
     const shortType = type === "input" ? "Input" : "Output";
     return `${shortType} token exhausted. Your ${type} requires ${needed} tokens but you have ${balance}. Balances reset daily at 12:00 AM.`;
+  };
+
+  // ✅ Add copy functionality
+  const copyToClipboard = async (text: string, type: 'question' | 'answer', messageIndex: number) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      const key = `${messageIndex}-${type}`;
+      setCopiedItems(prev => ({ ...prev, [key]: true }));
+      
+      // Reset copy state after 2 seconds
+      setTimeout(() => {
+        setCopiedItems(prev => ({ ...prev, [key]: false }));
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+      // ✅ Show error in alert dialog
+      setAlertDialogMessage("Failed to copy text to clipboard. Please try again.");
+      setAlertDialogOpen(true);
+    }
   };
 
   useEffect(() => {
@@ -233,13 +246,19 @@ export default function ChatbotPage() {
       setUserMemory(null);
       return;
     }
-    fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`)
+    fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         setUserMemory(data);
         if (data.sessions && data.sessions.length > 0) {
           setSelectedSession(data.sessions[0].session_id);
         }
+      })
+      .catch(error => {
+        console.error('Failed to fetch user memory:', error);
+        // ✅ Show error in alert dialog
+        setAlertDialogMessage("Failed to load chat history. Please refresh the page.");
+        setAlertDialogOpen(true);
       });
   }, [user]);
 
@@ -262,43 +281,63 @@ export default function ChatbotPage() {
 
   const messages = userMemory?.sessions?.find((s: any) => s.session_id === selectedSession)?.qa || [];
 
-  const validateFiles = (files: File[], allowedTypes: string[]) => {
+  // ✅ Update validateFiles to only handle PDF files and show errors in alert dialog
+  // ✅ Limit to 1 PDF per request
+  const validateFiles = (files: File[]) => {
     const { maxCount, maxSizeMB } = fileLimits;
     
-    if (files.length > maxCount) {
-      setTokenErrorMsg(formatLimitError("file_count", files.length, maxCount));
+    // ✅ Only allow 1 PDF per request
+    if (files.length > 1) {
+      setAlertDialogMessage("You can only upload 1 PDF file per message. Please select only one file.");
+      setAlertDialogOpen(true);
       return false;
     }
+    
+    if (files.length > maxCount) {
+      const errorMsg = formatLimitError("file_count", files.length, maxCount);
+      setAlertDialogMessage(errorMsg);
+      setAlertDialogOpen(true);
+      return false;
+    }
+    
     for (const file of files) {
       const ext = file.name.split(".").pop()?.toLowerCase();
       const mime = file.type;
-      if (!allowedTypes.includes(mime) && !allowedTypes.includes("." + ext)) {
-        setTokenErrorMsg(`File "${file.name}" is not a supported format.`);
+      
+      // ✅ Only allow PDF files
+      if (mime !== "application/pdf" && ext !== "pdf") {
+        setAlertDialogMessage(`File "${file.name}" is not supported. Only PDF files are allowed.`);
+        setAlertDialogOpen(true);
         return false;
       }
-      // ✅ This is already validating per file in MB
+      
+      // ✅ File size limit is in MB per file
       if (file.size > maxSizeMB * 1024 * 1024) {
-        setTokenErrorMsg(formatLimitError("file_size", Math.ceil(file.size / (1024 * 1024)), maxSizeMB, file.name));
+        const errorMsg = formatLimitError("file_size", Math.ceil(file.size / (1024 * 1024)), maxSizeMB, file.name);
+        setAlertDialogMessage(errorMsg);
+        setAlertDialogOpen(true);
         return false;
       }
     }
     return true;
   };
 
+  // ✅ Update handleFileChange to only handle PDFs - limit to 1 file
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    if (validateFiles(files, SUPPORTED_FILE_TYPES)) {
-      setSelectedFiles(files);
+    
+    // ✅ Only take the first file if multiple are selected
+    const singleFile = files.length > 0 ? [files[0]] : [];
+    
+    if (validateFiles(singleFile)) {
+      setSelectedFiles(singleFile);
     }
     setShowUploadOptions(false);
-  };
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    if (validateFiles(files, SUPPORTED_IMAGE_TYPES)) {
-      setSelectedImages(files);
+    
+    // Reset file input to allow selecting the same file again if needed
+    if (e.target) {
+      e.target.value = '';
     }
-    setShowUploadOptions(false);
   };
 
   // Simple heuristic title generator (produce 2-3 meaningful words)
@@ -354,44 +393,30 @@ export default function ChatbotPage() {
 
   // create session helper that shows dialog on memory-limit error
   async function createSession(session_name: string) {
-    const res = await fetch(`${API_BASE}/chatbot/add-session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: user.role, id: user.id, session_name })
-    });
+    try {
+      const res = await fetch(`${API_BASE}/chatbot/add-session`, {
+        method: "POST",
+        credentials: 'include',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: user.role, id: user.id, session_name })
+      });
 
-    const text = await res.text().catch(() => "");
-    let json: any = null;
-    try { json = text ? JSON.parse(text) : null; } catch {}
+      const text = await res.text().catch(() => "");
+      let json: any = null;
+      try { json = text ? JSON.parse(text) : null; } catch {}
 
-    if (res.ok) {
-      setTokenErrorMsg(""); // clear any previous token messages
-      return json?.session_id ?? null;
+      if (res.ok) {
+        return json?.session_id ?? null;
+      }
+
+      // ✅ For session creation errors, throw error to be caught by handleSend
+      const msg = json?.message ?? json?.error ?? json ?? text ?? "Failed to create session.";
+      throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+
+    } catch (error) {
+      console.error('Error creating session:', error);
+      throw error; // Re-throw to be handled by handleSend
     }
-
-    // extract meaningful message and code
-    const code = json?.code ?? (json?.message?.code);
-    const msg = json?.message ?? json?.error ?? json ?? text ?? "Failed to create session.";
-
-    // If backend reports limit exhaustion, show inline message (not alert)
-    if (code === "INPUT_TOKEN_EXHAUSTED" || code === "OUTPUT_TOKEN_EXHAUSTED" || code === "REQUEST_LIMIT_EXHAUSTED") {
-      // derive needed/balance if backend provided numbers, else estimate
-      const needed = json?.needed ?? calcTokens(input);
-      const balance = json?.balance ?? (
-        code === "INPUT_TOKEN_EXHAUSTED" ? (balances.input ?? 0) : 
-        code === "OUTPUT_TOKEN_EXHAUSTED" ? (balances.output ?? 0) :
-        (balances.requests ?? 0)
-      );
-      const type = code === "INPUT_TOKEN_EXHAUSTED" ? "input" : 
-                   code === "OUTPUT_TOKEN_EXHAUSTED" ? "output" : "request";
-      setTokenErrorMsg(formatLimitError(type as any, needed, balance));
-      return null; // don't throw so caller can stop flow gracefully
-    }
-
-    // Non-token errors fallback to existing alert flow
-    setAlertDialogMessage(typeof msg === "string" ? msg : JSON.stringify(msg));
-    setAlertDialogOpen(true);
-    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
 
   const handleNewChat = async () => {
@@ -413,19 +438,38 @@ export default function ChatbotPage() {
   const [currentQuestion, setCurrentQuestion] = useState<string>("");
 
   const handleSend = async () => {
-    if (!input.trim() && selectedFiles.length === 0 && selectedImages.length === 0) return;
+    // ✅ Remove selectedImages from validation
+    if (!input.trim() && selectedFiles.length === 0) return;
 
     // Store current input and files
     const currentInput = input.trim();
     const currentFiles = [...selectedFiles];
-    const currentImages = [...selectedImages];
+
+    // ✅ Only check input tokens and requests upfront - let server handle output token validation
+    const currentInputTokens = calcTokens(currentInput);
+    
+    // Check if user has sufficient input tokens and requests before proceeding
+    if (balances.input !== undefined && currentInputTokens > balances.input) {
+      const errorMsg = formatLimitError("input", currentInputTokens, balances.input);
+      setAlertDialogMessage(errorMsg);
+      setAlertDialogOpen(true);
+      return;
+    }
+    
+    if (balances.requests !== undefined && balances.requests <= 0) {
+      const errorMsg = formatLimitError("request", 1, balances.requests);
+      setAlertDialogMessage(errorMsg);
+      setAlertDialogOpen(true);
+      return;
+    }
+
+    // ✅ Remove the output token pre-validation - let the server handle it with actual response
 
     // ✅ Show question immediately and clear input
     setCurrentQuestion(currentInput);
     setInput("");
     setSelectedFiles([]);
-    setSelectedImages([]);
-    setIsLoading(true);
+    setIsLoading(true); // Start loading immediately
 
     try {
       let sessionId = selectedSession;
@@ -435,41 +479,36 @@ export default function ChatbotPage() {
         const generatedTitle = generateTitleFromText(currentInput, 3, 2);
         sessionId = await createSession(generatedTitle);
         if (!sessionId) {
-          // ✅ On error, restore everything and clear current question
+          // ✅ On session creation error, restore everything and show error in alert
           setCurrentQuestion("");
           setInput(currentInput);
           setSelectedFiles(currentFiles);
-          setSelectedImages(currentImages);
           setIsLoading(false);
+          setAlertDialogMessage("Failed to create new chat session. Please try again.");
+          setAlertDialogOpen(true);
           return;
         }
         setSelectedSession(sessionId);
         setComposingNew(false);
       }
 
-      // Prepare files data for backend
-      const filesData = [
-        ...currentFiles.map(file => ({
-          name: file.name,
-          size: file.size,
-          type: file.type
-        })),
-        ...currentImages.map(file => ({
-          name: file.name,
-          size: file.size,
-          type: file.type
-        }))
-      ];
+      // Prepare files data for backend - only PDF files now
+      const filesData = currentFiles.map(file => ({
+        name: file.name,
+        size: file.size,
+        type: file.type
+      }));
 
+      // ✅ Make the API call - keep loader running during this time
       const res = await fetch(`${API_BASE}/chatbot/add-qa`, {
         method: "POST",
+        credentials: 'include',
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           role: user.role,
           id: user.id,
           session_id: sessionId,
           question: currentInput,
-          answer: "This is a placeholder bot answer.",
           timestamp: new Date().toISOString(),
           files: filesData.length > 0 ? filesData : undefined
         })
@@ -480,114 +519,154 @@ export default function ChatbotPage() {
       try { json = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        // ✅ On error, restore everything and clear current question
+        // ✅ On API error, restore form and show error in alert dialog
         setCurrentQuestion("");
         setInput(currentInput);
         setSelectedFiles(currentFiles);
-        setSelectedImages(currentImages);
-        
-        const code = json?.code ?? (json?.message?.code);
-        if (code === "INPUT_TOKEN_EXHAUSTED" || code === "OUTPUT_TOKEN_EXHAUSTED" || code === "REQUEST_LIMIT_EXHAUSTED" || code === "FILE_COUNT_EXHAUSTED" || code === "FILE_SIZE_EXCEEDED") {
-          const needed = json?.needed ?? calcTokens(currentInput);
-          const balance = json?.balance ?? (
-            code === "INPUT_TOKEN_EXHAUSTED" ? (balances.input ?? 0) : 
-            code === "OUTPUT_TOKEN_EXHAUSTED" ? (balances.output ?? 0) :
-            code === "REQUEST_LIMIT_EXHAUSTED" ? (balances.requests ?? 0) :
-            code === "FILE_COUNT_EXHAUSTED" ? (fileLimits.maxCount ?? 0) :
-            (fileLimits.maxSizeMB ?? 0)
-          );
-          
-          const type = 
-            code === "INPUT_TOKEN_EXHAUSTED" ? "input" : 
-            code === "OUTPUT_TOKEN_EXHAUSTED" ? "output" : 
-            code === "REQUEST_LIMIT_EXHAUSTED" ? "request" :
-            code === "FILE_COUNT_EXHAUSTED" ? "file_count" : "file_size";
-            
-          const fileName = code === "FILE_SIZE_EXCEEDED" ? json?.fileName : undefined;
-          setTokenErrorMsg(formatLimitError(type as any, needed, balance, fileName));
-          setIsLoading(false);
-          return;
-        }
-
-        // other errors -> show alert dialog
-        let msg = "Failed to send message.";
-        if (json) {
-          if (typeof json === "string") msg = json;
-          else if (json.message) msg = typeof json.message === "string" ? json.message : (json.message.message ?? JSON.stringify(json.message));
-          else if (json.error) msg = json.error;
-          else msg = JSON.stringify(json);
-        } else if (text) msg = text;
-        setAlertDialogMessage(msg);
-        setAlertDialogOpen(true);
         setIsLoading(false);
+        
+        // ✅ Extract error message for alert dialog - handle the exact error format you're getting
+        let errorMessage = "Failed to send message. Please try again.";
+        
+        console.log('Error response:', { json, text, status: res.status }); // Debug log
+        
+        // ✅ Handle the specific error format from your backend
+        const code = json?.code;
+        if (code === "INPUT_TOKEN_EXHAUSTED" || 
+            code === "OUTPUT_TOKEN_EXHAUSTED" || 
+            code === "REQUEST_LIMIT_EXHAUSTED" || 
+            code === "FILE_COUNT_EXHAUSTED" || 
+            code === "FILE_SIZE_EXCEEDED") {
+          
+          // ✅ Use the server's error message directly since it has the actual token counts
+          errorMessage = json.message || json.error || errorMessage;
+          
+          console.log('Token limit error detected:', { code, message: errorMessage }); // Debug log
+          
+        } else if (json?.message) {
+          errorMessage = typeof json.message === "string" ? json.message : JSON.stringify(json.message);
+        } else if (json?.error) {
+          errorMessage = json.error;
+        } else if (json) {
+          errorMessage = JSON.stringify(json);
+        } else if (text) {
+          errorMessage = text;
+        }
+        
+        console.log('Final error message:', errorMessage); // Debug log
+        
+        // ✅ Show error in alert dialog
+        setAlertDialogMessage(errorMessage);
+        setAlertDialogOpen(true);
         return;
       }
 
-      // ✅ SUCCESS: Clear current question and refresh data
+      // ✅ SUCCESS: Keep loading while refreshing data
       setCurrentQuestion("");
-      setTokenErrorMsg("");
       
-      // Refresh memory/balances to show the new message with bot response
+      // Refresh memory/balances to show the new message with real bot response
       try {
-        const memRes = await fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`);
+        const memRes = await fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`, { credentials: 'include' });
         if (memRes.ok) {
           const memData = await memRes.json();
           setUserMemory(memData);
+        } else {
+          throw new Error('Failed to refresh conversation');
         }
-      } catch {}
+      } catch (refreshError) {
+        console.error('Failed to refresh conversation:', refreshError);
+        setAlertDialogMessage("Message sent but failed to refresh conversation. Please reload the page.");
+        setAlertDialogOpen(true);
+      }
 
       if (!selectedSession) setSelectedSession(sessionId);
+
     } catch (err: any) {
-      // ✅ On error, restore everything and clear current question
+      console.error('Unexpected error in handleSend:', err);
+      
+      // ✅ On unexpected error, restore form and show error in alert dialog
       setCurrentQuestion("");
       setInput(currentInput);
       setSelectedFiles(currentFiles);
-      setSelectedImages(currentImages);
-      setAlertDialogMessage(err?.message ?? "Failed to send message.");
+      
+      let errorMessage = "An unexpected error occurred while sending your message.";
+      if (err?.message) {
+        errorMessage = err.message;
+      } else if (typeof err === 'string') {
+        errorMessage = err;
+      }
+      
+      // ✅ Show error in alert dialog
+      setAlertDialogMessage(errorMessage);
       setAlertDialogOpen(true);
     } finally {
+      // ✅ Always stop loading when everything is done
       setIsLoading(false);
     }
   };
 
   const handleDeleteChat = async (session_id: string) => {
-    await fetch(`${API_BASE}/chatbot/delete-session`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: user.role, id: user.id, session_id })
-    });
-    setSelectedSession(null);
-    setInput("");
-    fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`)
-      .then(res => res.json())
-      .then(data => setUserMemory(data));
+    try {
+      const res = await fetch(`${API_BASE}/chatbot/delete-session`, {
+        method: "DELETE",
+        credentials: 'include',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: user.role, id: user.id, session_id })
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to delete chat session');
+      }
+
+      setSelectedSession(null);
+      setInput("");
+      
+      // Refresh user memory
+      const memRes = await fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`, { credentials: 'include' });
+      if (memRes.ok) {
+        const data = await memRes.json();
+        setUserMemory(data);
+      }
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+      setAlertDialogMessage("Failed to delete chat session. Please try again.");
+      setAlertDialogOpen(true);
+    }
   };
 
   const handleDeleteUser = async () => {
     setDeleteDialogOpen(false);
-    const res = await fetch(`${API_BASE}/chatbot/delete-user`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: user.role, id: user.id })
-    });
-    if (res.ok) {
-      setAlertDialogMessage("Your account and memory have been removed. Redirecting to login...");
-      setAlertDialogOpen(true);
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem("userId");
-        window.localStorage.removeItem("userName");
-        window.localStorage.removeItem("userRole");
+    try {
+      const res = await fetch(`${API_BASE}/chatbot/delete-user`, {
+        method: "DELETE",
+        credentials: 'include',
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: user.role, id: user.id })
+      });
+      
+      if (res.ok) {
+        setAlertDialogMessage("Your account and memory have been removed. Redirecting to login...");
+        setAlertDialogOpen(true);
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem("userId");
+          window.localStorage.removeItem("userName");
+          window.localStorage.removeItem("userRole");
+        }
+        setUser({ id: "guest", name: "Guest", role: "guest" });
+        setUserMemory(null);
+        setSelectedSession(null);
+        setInput("");
+        setTimeout(() => {
+          setAlertDialogOpen(false);
+          window.location.href = "/modules/authentication";
+        }, 1800);
+      } else {
+        setAlertDialogMessage("Could not delete your account. Please try again.");
+        setAlertDialogOpen(true);
       }
-      setUser({ id: "guest", name: "Guest", role: "guest" });
-      setUserMemory(null);
-      setSelectedSession(null);
-      setInput("");
-      setTimeout(() => {
-        setAlertDialogOpen(false);
-        window.location.href = "/modules/authentication";
-      }, 1800);
-    } else {
-      setAlertDialogMessage("Could not delete your account.");
+    } catch (error) {
+      console.error('Error deleting user:', error);
+      setAlertDialogMessage("An error occurred while deleting your account. Please try again.");
       setAlertDialogOpen(true);
     }
   };
@@ -607,9 +686,6 @@ export default function ChatbotPage() {
 
   const removeFile = (idx: number) => {
     setSelectedFiles(files => files.filter((_, i) => i !== idx));
-  };
-  const removeImage = (idx: number) => {
-    setSelectedImages(images => images.filter((_, i) => i !== idx));
   };
 
   useEffect(() => {
@@ -643,16 +719,16 @@ export default function ChatbotPage() {
   const requestsExhausted = 
     typeof balances.requests === "number" && balances.requests <= 0;
 
-  const currentInputTokens = calcTokens(input);
-  const estimatedOutputTokens = Math.max(1, Math.ceil(currentInputTokens * 2));
-
   // Disable uploads when any limit is exhausted
   const uploadsDisabled = tokensExhausted || requestsExhausted || fileLimitsExhausted;
 
   // Disable the send button if no content, guest user, or request limit exhausted
-  const sendDisabled = (!input.trim() && selectedFiles.length === 0 && selectedImages.length === 0) || 
+  const sendDisabled = (!input.trim() && selectedFiles.length === 0) || 
                        user.role === "guest" || 
                        requestsExhausted;
+
+  // ✅ Disable upload button when a PDF is already selected
+  const uploadButtonDisabled = uploadsDisabled || selectedFiles.length > 0;
 
   return (
     <div className="h-screen w-full flex bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800 relative overflow-hidden chatbot-container">
@@ -692,7 +768,6 @@ export default function ChatbotPage() {
               </>
             ) : (
               <div className="flex flex-col items-center gap-2">
-                {/* ✅ Enhanced + button with tooltip and better visibility */}
                 <div className="relative group">
                   <Button 
                     variant="ghost" 
@@ -704,13 +779,11 @@ export default function ChatbotPage() {
                   >
                     <Plus size={20} />
                   </Button>
-                  {/* Tooltip */}
                   <div className="absolute left-12 top-1/2 transform -translate-y-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
                     New Chat
                   </div>
                 </div>
 
-                {/* ✅ Enhanced search button with tooltip and better visibility */}
                 <div className="relative group">
                   <Button 
                     variant="ghost" 
@@ -721,7 +794,6 @@ export default function ChatbotPage() {
                   >
                     <Search size={20} />
                   </Button>
-                  {/* Tooltip */}
                   <div className="absolute left-12 top-1/2 transform -translate-y-1/2 bg-gray-900 text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
                     Search Chats
                   </div>
@@ -757,13 +829,12 @@ export default function ChatbotPage() {
         <div className="fixed top-0 left-0 h-full w-72 bg-blue-950/95 border-r border-blue-900 z-40 flex flex-col shadow-2xl animate-fade-in">
           <div className="flex items-center justify-between px-4 py-4 border-b border-blue-900">
             <div className="flex items-center gap-3">
-              {/* ✅ Updated back button to switch between sidebars instead of closing */}
               <Button 
                 variant="ghost" 
                 size="icon" 
                 onClick={() => {
-                  setProfileSidebarOpen(false);  // Close profile sidebar
-                  setSidebarOpen(true);          // Open main sidebar
+                  setProfileSidebarOpen(false);  
+                  setSidebarOpen(true);          
                 }}
                 className="bg-cyan-700 hover:bg-cyan-800 text-white rounded-lg mr-2"
                 aria-label="Back to main sidebar"
@@ -854,7 +925,6 @@ export default function ChatbotPage() {
         </div>
       )}
       <div className={`flex-1 flex flex-col ${sidebarOpen || profileSidebarOpen ? "ml-16 md:ml-72" : "ml-16"} transition-all duration-300`}>
-        {/* ✅ Normal flex direction for top-to-bottom conversation with auto-scroll to bottom */}
         <div className="flex-1 overflow-y-auto px-0 py-6 z-10 messages-scroll">
           <div className="max-w-2xl w-full mx-auto flex flex-col gap-2 px-4 min-h-full">
             {messages.length === 0 && !isLoading ? (
@@ -864,32 +934,97 @@ export default function ChatbotPage() {
                   Welcome, {(user.name || "Guest").split(' ')[0]}! 👋
                 </h2>
                 <p className="text-base lg:text-lg text-cyan-200 text-center max-w-md mb-6">
-                  I'm your AU assistant. Ask me anything about campus life, academics, or just chat!
+                  I'm your AU assistant. Ask me anything about campus life, academics, or upload a PDF for analysis!
                 </p>
               </div>
             ) : (
               <div className="flex flex-col gap-2 mt-auto">
-                {/* ✅ Show all existing messages first */}
+                {/* ✅ Show all existing messages with copy functionality and PDF indicators */}
                 {messages.map((msg: any, idx: number) => (
                   <div key={idx}>
+                    {/* User Question */}
                     <div className="flex justify-end mb-2">
-                      <div className="max-w-[85%] bg-cyan-700 text-white px-4 py-3 rounded-2xl">
-                        <div className="text-base">{msg.question}</div>
+                      <div className="max-w-[90%] flex flex-col items-end gap-1">
+                        {/* ✅ Show PDF indicator if files were attached to this message */}
+                        {msg.files && msg.files.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mb-1">
+                            {msg.files.map((file: any, fileIdx: number) => (
+                              <div 
+                                key={fileIdx}
+                                className="flex items-center gap-1 bg-cyan-800 text-white px-2 py-1 rounded-lg text-xs"
+                              >
+                                <span>📄</span>
+                                <span className="max-w-[150px] truncate">{file.name || 'Document.pdf'}</span>
+                                <span className="text-cyan-300 text-[10px]">
+                                  ({file.size ? `${(file.size / 1024).toFixed(1)} KB` : 'PDF'})
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {/* Question bubble */}
+                        <div className="bg-cyan-700 text-white px-4 py-3 rounded-2xl relative group">
+                          <div className="text-base">{msg.question}</div>
+                          {/* ✅ Copy button for question */}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-200 hover:text-white hover:bg-cyan-800"
+                            onClick={() => copyToClipboard(msg.question, 'question', idx)}
+                            aria-label="Copy question"
+                          >
+                            {copiedItems[`${idx}-question`] ? <Check size={14} /> : <Copy size={14} />}
+                          </Button>
+                        </div>
                       </div>
                     </div>
+                    
+                    {/* Bot Answer */}
                     <div className="flex justify-start mb-4">
-                      <div className="max-w-[85%] bg-blue-900/80 text-cyan-100 px-4 py-3 rounded-2xl">
-                        <div className="text-base">{msg.answer}</div>
+                      <div className="max-w-[85%] bg-blue-900/80 text-cyan-100 px-4 py-3 rounded-2xl relative group">
+                        <MarkdownRenderer content={msg.answer} />
+                        {/* <div className="text-base whitespace-pre-wrap">{msg.answer}</div> */}
+                        {/* ✅ Copy button for answer */}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-300 hover:text-white hover:bg-blue-800"
+                          onClick={() => copyToClipboard(msg.answer, 'answer', idx)}
+                          aria-label="Copy answer"
+                        >
+                          {copiedItems[`${idx}-answer`] ? <Check size={14} /> : <Copy size={14} />}
+                        </Button>
                       </div>
                     </div>
                   </div>
                 ))}
                 
-                {/* ✅ Show current question immediately when sent */}
+                {/* ✅ Show current question immediately when sent with PDF indicator */}
                 {currentQuestion && (
                   <div className="flex justify-end mb-2">
-                    <div className="max-w-[85%] bg-cyan-700 text-white px-4 py-3 rounded-2xl">
-                      <div className="text-base">{currentQuestion}</div>
+                    <div className="max-w-[90%] flex flex-col items-end gap-1">
+                      {/* Show the PDF that was just uploaded */}
+                      {selectedFiles.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-1">
+                          {selectedFiles.map((file, fileIdx) => (
+                            <div 
+                              key={fileIdx}
+                              className="flex items-center gap-1 bg-cyan-800 text-white px-2 py-1 rounded-lg text-xs"
+                            >
+                              <span>📄</span>
+                              <span className="max-w-[150px] truncate">{file.name}</span>
+                              <span className="text-cyan-300 text-[10px]">
+                                ({(file.size / 1024).toFixed(1)} KB)
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      
+                      <div className="bg-cyan-700 text-white px-4 py-3 rounded-2xl">
+                        <div className="text-base">{currentQuestion}</div>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -915,89 +1050,60 @@ export default function ChatbotPage() {
         <div className="p-4 lg:p-6 bg-transparent border-t border-blue-900 flex-shrink-0 z-10">
           <form className="max-w-2xl mx-auto w-full" onSubmit={e => { e.preventDefault(); handleSend(); }}>
             <div className="flex flex-col gap-2">
-              {/* compact token message placed directly above the input prompt (wider, subtle bg) */}
-              {tokenErrorMsg && (
-                <div
-                  className="flex items-start gap-3 py-2 px-3 text-sm border rounded-md w-full max-w-3xl"
-                  style={{ backgroundColor: "rgba(220,38,38,0.06)", borderColor: "rgba(220,38,38,0.16)" }}
-                >
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    className="text-red-600 flex-shrink-0"
-                    fill="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                    aria-hidden
-                  >
-                    <path d="M13 12C13 11.4477 12.5523 11 12 11C11.4477 11 11 11.4477 11 12V16C11 16.5523 11.4477 17 12 17C12.5523 17 13 16.5523 13 16V12Z" fill="currentColor"></path>
-                    <path d="M12 9.5C12.6904 9.5 13.25 8.94036 13.25 8.25C13.25 7.55964 12.6904 7 12 7C11.3096 7 10.75 7.55964 10.75 8.25C10.75 8.94036 11.3096 9.5 12 9.5Z" fill="currentColor"></path>
-                    <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2ZM4 12C4 7.58172 7.58172 4 12 4C16.4183 4 20 7.58172 20 12C20 16.4183 16.4183 20 12 20C7.58172 20 4 16.4183 4 12Z" fill="currentColor"></path>
-                  </svg>
-                  <div className="text-red-700 leading-5">{tokenErrorMsg}</div>
-                </div>
-              )}
-
               <div className="relative flex items-center">
-                {/* Upload button - disabled when tokens/requests/file limits exhausted */}
+                {/* ✅ Upload button - disabled when a PDF is already selected */}
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="absolute left-2 top-1/2 transform -translate-y-1/2 text-cyan-400"
-                  onClick={() => { if (!uploadsDisabled) setShowUploadOptions(o => !o); }}
+                  className={`absolute left-2 top-1/2 transform -translate-y-1/2 transition-all duration-200 ${
+                    uploadButtonDisabled 
+                      ? 'text-gray-500 cursor-not-allowed opacity-50' 
+                      : 'text-cyan-400 hover:text-white hover:bg-cyan-700'
+                  }`}
+                  onClick={() => { 
+                    if (!uploadButtonDisabled) setShowUploadOptions(o => !o); 
+                  }}
                   tabIndex={0}
-                  aria-label="Upload"
-                  disabled={uploadsDisabled}
+                  aria-label="Upload PDF"
+                  disabled={uploadButtonDisabled}
+                  title={selectedFiles.length > 0 ? "Remove current PDF to upload another" : "Upload PDF"}
                 >
                   <Plus size={22} />
                 </Button>
 
-                {showUploadOptions && (
-                  <div id="upload-menu" className="absolute left-12 top-0 bg-blue-900 border border-blue-800 rounded-lg shadow-lg z-50 flex flex-col">
+                {/* ✅ Simplified upload options - only PDF */}
+                {showUploadOptions && !uploadButtonDisabled && (
+                  <div id="upload-menu" className="absolute left-2 bottom-14 bg-blue-900 border border-blue-800 rounded-lg shadow-lg z-50 flex flex-col min-w-[140px]">
                     <Button
                       variant="ghost"
-                      className="flex gap-2 items-center text-cyan-200 hover:bg-blue-800"
-                      onClick={() => { if (!uploadsDisabled) fileInputRef.current?.click(); }}
-                      disabled={uploadsDisabled}
+                      className="flex gap-2 items-center text-cyan-200 hover:bg-blue-800 px-3 py-2 justify-start rounded-lg"
+                      onClick={() => { 
+                        if (!uploadButtonDisabled) fileInputRef.current?.click(); 
+                        setShowUploadOptions(false);
+                      }}
+                      disabled={uploadButtonDisabled}
                     >
-                      <Upload size={18} /> Upload Files
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="flex gap-2 items-center text-cyan-200 hover:bg-blue-800"
-                      onClick={() => { if (!uploadsDisabled) imageInputRef.current?.click(); }}
-                      disabled={uploadsDisabled}
-                    >
-                      <ImageIcon size={18} /> Upload Images
+                      <Upload size={18} /> Upload PDF
                     </Button>
                   </div>
                 )}
 
+                {/* ✅ Only PDF file input */}
                 <input
                   ref={fileInputRef}
                   type="file"
-                  multiple
-                  accept={SUPPORTED_FILE_TYPES.join(",")}
+                  accept=".pdf,application/pdf"
                   style={{ display: "none" }}
-                  onChange={e => { if (!uploadsDisabled) handleFileChange(e); }}
-                  disabled={uploadsDisabled}
-                />
-                <input
-                  ref={imageInputRef}
-                  type="file"
-                  multiple
-                  accept={SUPPORTED_IMAGE_TYPES.join(",")}
-                  style={{ display: "none" }}
-                  onChange={e => { if (!uploadsDisabled) handleImageChange(e); }}
-                  disabled={uploadsDisabled}
+                  onChange={handleFileChange}
+                  disabled={uploadButtonDisabled}
                 />
 
                 <Input
                   type="text"
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  placeholder="Type your message..."
+                  placeholder={selectedFiles.length > 0 ? "Add a message about this PDF..." : "Type your message or upload a PDF..."}
                   className="w-full bg-blue-900/80 text-white placeholder-white border border-black h-12 px-12 pr-20 text-base rounded-2xl focus:outline-none focus:ring-2 focus:ring-cyan-700/30"
                   autoComplete="off"
                   disabled={user.role === "guest"}
@@ -1006,8 +1112,8 @@ export default function ChatbotPage() {
                 <Button
                   type="submit"
                   size="sm"
-                  className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-cyan-700 text-white hover:bg-cyan-800 h-10 w-10 rounded-xl p-0 flex items-center justify-center"
-                  disabled={sendDisabled || isLoading} // ✅ Disable when loading
+                  className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-cyan-700 text-white hover:bg-cyan-800 h-10 w-10 rounded-xl p-0 flex items-center justify-center disabled:opacity-50"
+                  disabled={sendDisabled || isLoading}
                   aria-label="Send"
                 >
                   {isLoading ? (
@@ -1018,51 +1124,96 @@ export default function ChatbotPage() {
                 </Button>
               </div>
 
-              {(selectedFiles.length > 0 || selectedImages.length > 0) && (
-                <div className="mt-2 flex gap-4 flex-wrap text-cyan-200 text-sm">
+              {/* ✅ Show PDF files with improved styling and remove button */}
+              {selectedFiles.length > 0 && (
+                <div className="mt-2 flex gap-2 flex-wrap text-cyan-200 text-sm">
                   {selectedFiles.map((file, idx) => (
-                    <span key={file.name + idx} className="flex items-center bg-blue-900 px-2 py-1 rounded-lg mr-2 mb-2">
-                      {file.name}
+                    <div 
+                      key={file.name + idx} 
+                      className="flex items-center bg-blue-900/90 border border-blue-800 px-3 py-2 rounded-lg group hover:bg-blue-800 transition-colors duration-200"
+                    >
+                      <span className="text-lg mr-2">📄</span>
+                      <div className="flex flex-col mr-3">
+                        <span className="text-cyan-100 font-medium text-sm">{file.name}</span>
+                        <span className="text-cyan-400 text-xs">
+                          {(file.size / 1024).toFixed(1)} KB • PDF
+                        </span>
+                      </div>
                       <button
                         type="button"
-                        className="ml-2 text-red-400 hover:text-red-600"
+                        className="ml-auto text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded p-1 transition-colors duration-200"
                         onClick={() => removeFile(idx)}
-                        aria-label="Remove file"
+                        aria-label="Remove PDF"
+                        title="Remove PDF"
                       >
-                        <XIcon size={16} />
+                        <XIcon size={18} />
                       </button>
-                    </span>
+                    </div>
                   ))}
-                  {selectedImages.map((img, idx) => (
-                    <span key={img.name + idx} className="flex items-center bg-blue-900 px-2 py-1 rounded-lg mr-2 mb-2">
-                      {img.name}
-                      <button
-                        type="button"
-                        className="ml-2 text-red-400 hover:text-red-600"
-                        onClick={() => removeImage(idx)}
-                        aria-label="Remove image"
-                      >
-                        <XIcon size={16} />
-                      </button>
-                    </span>
-                  ))}
+                </div>
+              )}
+
+              {/* ✅ Show helper text when PDF is selected */}
+              {selectedFiles.length > 0 && (
+                <div className="text-cyan-400 text-xs flex items-center gap-1">
+                  <span className="inline-block w-1 h-1 bg-cyan-400 rounded-full"></span>
+                  <span>Remove the PDF above to upload a different file</span>
                 </div>
               )}
             </div>
           </form>
         </div>
       </div>
+      
+      {/* ✅ Enhanced AlertDialog with UI-matching colors */}
       <AlertDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen}>
-        <AlertDialogContent className="bg-blue-950 border-blue-900 text-cyan-100">
+        <AlertDialogContent className="bg-gradient-to-br from-blue-950 to-blue-900 border border-blue-800 text-cyan-100 shadow-2xl max-w-md mx-4 z-[9999]">
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {alertDialogMessage.includes("removed") ? "Account Deleted" : "Error"}
+            <AlertDialogTitle className="text-xl font-semibold text-cyan-100 mb-2">
+              {alertDialogMessage.includes("removed") || alertDialogMessage.includes("deleted") ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center">
+                    <span className="text-white text-sm font-bold">✓</span>
+                  </div>
+                  Account Deleted
+                </span>
+              ) : alertDialogMessage.includes("limit") || alertDialogMessage.includes("exhausted") || alertDialogMessage.includes("exceeded") ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-amber-600 flex items-center justify-center">
+                    <span className="text-white text-sm font-bold">!</span>
+                  </div>
+                  Limit Exceeded
+                </span>
+              ) : alertDialogMessage.includes("Failed") || alertDialogMessage.includes("Error") || alertDialogMessage.includes("error") ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center">
+                    <span className="text-white text-sm font-bold">✕</span>
+                  </div>
+                  Error
+                </span>
+              ) : alertDialogMessage.includes("copy") || alertDialogMessage.includes("clipboard") ? (
+                <span className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-cyan-600 flex items-center justify-center">
+                    <Copy size={14} className="text-white" />
+                  </div>
+                  Copy Error
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-blue-600 flex items-center justify-center">
+                    <span className="text-white text-sm font-bold">i</span>
+                  </div>
+                  Notice
+                </span>
+              )}
             </AlertDialogTitle>
           </AlertDialogHeader>
-          <div className="py-2">{alertDialogMessage}</div>
-          <AlertDialogFooter>
+          <div className="py-2 text-cyan-200 leading-relaxed">
+            {alertDialogMessage}
+          </div>
+          <AlertDialogFooter className="mt-4">
             <AlertDialogCancel
-              className="bg-blue-900 text-cyan-100 border border-blue-800"
+              className="bg-gradient-to-r from-blue-800 to-blue-700 text-cyan-100 border border-blue-600 hover:from-blue-700 hover:to-blue-600 hover:text-white transition-all duration-200 px-6 py-2 rounded-lg font-medium"
               onClick={() => setAlertDialogOpen(false)}
             >
               OK

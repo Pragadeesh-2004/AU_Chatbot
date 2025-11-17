@@ -1,7 +1,9 @@
-import { Controller, Get, Put, Post, Delete, Body, Param, Query } from '@nestjs/common';
+import { Controller, Get, Put, Post, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { AdminService } from './admin.service';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
 @Controller('admin')
+@UseGuards(JwtAuthGuard)
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
 
@@ -41,7 +43,18 @@ export class AdminController {
   }
 
   @Get('user-data')
-  getUserData() {
+  async getUserData() {
     return this.adminService.getUserData();
+  }
+
+  // New endpoints for dashboard statistics
+  @Get('statistics/users')
+  async getUserStatistics() {
+    return this.adminService.getUserStatistics();
+  }
+
+  @Get('statistics/guests')
+  async getGuestStatistics() {
+    return this.adminService.getGuestStatistics();
   }
 }

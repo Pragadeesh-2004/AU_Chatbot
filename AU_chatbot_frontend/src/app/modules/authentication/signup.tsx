@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,36 +9,45 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { User, ArrowLeft, Mail, Lock, Eye, EyeOff, GraduationCap } from "lucide-react";
+import { User, ArrowLeft, Mail, Lock, GraduationCap } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 
 // --- API utility in this file ---
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000";
 
 async function apiPost(path: string, data: any) {
-  const res = await fetch(`${API_BASE}/authentication/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  let json: any = {};
+  const url = `${API_BASE}/authentication/${path}`;
   try {
-    json = await res.json();
-  } catch {
-    // ignore
-  }
-  // --- Fix: Always extract a string error message ---
-  let errorMsg = "API error";
-  if (json) {
-    if (typeof json.message === "string") {
-      errorMsg = json.message;
-    } else if (json.message && typeof json.message === "object" && typeof json.message.message === "string") {
-      errorMsg = json.message.message;
-    } else if (typeof json.error === "string") {
-      errorMsg = json.error;
+    const res = await fetch(url, {
+      method: "POST",
+      credentials: "include", // ensure cookies are sent/received
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    let json: any = {};
+    try { json = await res.json(); } catch {}
+    if (!res.ok) {
+      // normalize error payloads
+      const errMsg =
+        (typeof json?.message === "string" && json.message) ||
+        (json?.message?.message) ||
+        json?.error ||
+        res.statusText ||
+        "API error";
+      throw new Error(errMsg);
     }
+    return json;
+  } catch (err: any) {
+    console.error("apiPost failed", { url, body: data, error: err?.message || err });
+    throw err;
   }
-  if (!res.ok) throw new Error(errorMsg);
+}
+
+async function apiGet(path: string) {
+  const res = await fetch(`${API_BASE}/authentication/${path}`);
+  let json: any = {};
+  try { json = await res.json(); } catch {}
+  if (!res.ok) throw new Error(json?.message || json?.error || 'API error');
   return json;
 }
 // ---
@@ -86,8 +95,6 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [verified, setVerified] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
   const [inputError, setInputError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [token, setToken] = useState<string | null>(null);
@@ -96,6 +103,12 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
   const [resendCount, setResendCount] = useState(0);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ visible: boolean; type: "success" | "error"; message: string }>({
+    visible: false,
+    type: "success",
+    message: "",
+  });
+  const timerRef = useRef<number | null>(null);
 
   const params = useSearchParams();
   useEffect(() => {
@@ -110,26 +123,58 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
 
   const currentRole = roleOptions.find(r => r.value === role);
 
+  // When role or id changes, fetch existing verification status (if any)
+  useEffect(() => {
+    const fetchStatus = async () => {
+      if (!id || role === "admin") {
+        setResendCount(0);
+        return;
+      }
+      try {
+        const q = `verification?role=${encodeURIComponent(role)}&id=${encodeURIComponent(id)}`;
+        const status = await apiGet(q);
+        setResendCount(Number(status.resendCount || 0));
+      } catch {
+        // ignore - no existing record or fetch error -> leave resendCount at 0
+        setResendCount(0);
+      }
+    };
+
+    // debounce a bit to avoid calling on every keystroke
+    const t = window.setTimeout(fetchStatus, 300);
+    return () => window.clearTimeout(t);
+  }, [role, id]);
+
   // Step 1: Check user and send verification email
   const handleSendEmail = async () => {
     setInputError(null);
+    setCodeError(null);
     setIsLoading(true);
+
     try {
       const response = await apiPost("signup", { college, role, id });
-      setEmailSent(true);
-      setStep(2);
-    } catch (e: any) {
-      // Try to parse backend error message for user not found
-      let msg = e?.message || "";
-      if (
-        msg.toLowerCase().includes("not found") ||
-        msg.toLowerCase().includes("check your role") ||
-        msg.toLowerCase().includes("no anna university data")
-      ) {
-        setInputError("User and ID do not exist. Please check your role and number and try again.");
+
+      // backend returns resendCount (number of sends including this one)
+      const rc = Number(response?.resendCount ?? 0);
+
+      // Update state from authoritative backend value when available.
+      if (rc > 0) {
+        setResendCount(rc);
       } else {
-        setInputError(msg || "Something went wrong. Please try again.");
+        // fallback increment if backend didn't return a count
+        setResendCount(prev => Math.min(prev + 1, 3));
       }
+
+      setEmailSent(true);
+      // If user is already on step 2 (resend), keep them there; otherwise advance.
+      setStep(prev => (prev === 2 ? 2 : 2));
+
+      // Don't show intermediate alert dialog - only final modal at completion
+    } catch (e: any) {
+      // Do NOT increment resendCount on failure.
+      const msg = e?.message || "Something went wrong. Please try again.";
+      // Show error inline only
+      setInputError(msg);
     } finally {
       setIsLoading(false);
     }
@@ -178,47 +223,69 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
     }
   };
 
+  const goToLoginImmediate = () => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    // prefer callback if provided
+    if (onBackToLogin) onBackToLogin();
+    else window.location.href = "/modules/authentication";
+  };
+
   // Step 3: Complete signup with token from URL
   const handleCompleteSignup = async () => {
-    // ✅ Validate password before submission
+    // ✅ Validate password before submission - show inline validation only
     const passwordValidation = validatePassword(password);
     if (passwordValidation) {
-      window.alert(passwordValidation);
+      setPasswordError(passwordValidation);
       return;
     }
 
     if (password !== confirm) {
-      window.alert("Passwords do not match.");
+      setConfirmError("Passwords do not match.");
       return;
     }
 
     try {
       const useToken = token || btoa(`${role}:${id}:${Date.now()}`);
 
-      // Step 1: Verify token and password
+      // Verify token and set password (server now creates memory/rate-limit and returns warnings)
       const response = await apiPost("verify", { token: useToken, password, college });
+
+      // after successful verify (response from /authentication/verify)
+      // 1) ask backend to set JWT cookie
+      await fetch(`${API_BASE}/authentication/set-cookie`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, role, name: response?.name || '' }),
+      });
+      // 2) optional: verify cookie by calling /authentication/me
+      const meRes = await fetch(`${API_BASE}/authentication/me`, { credentials: 'include' });
+      if (!meRes.ok) {
+        console.warn('auth/me returned', meRes.status);
+      }
 
       const userName = response?.name || "";
 
-      // Step 2: Create memory for the user
-      const memRes = await fetch(`${API_BASE}/chatbot/add-user`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ college, role, id, name: userName })
-      });
-
-      if (!memRes.ok) {
-        const err = await memRes.json().catch(() => ({}));
-        console.error("Memory creation failed:", err);
-        window.alert(
-          "Signup succeeded but memory creation failed: " +
-            (err.message || memRes.statusText)
-        );
-        return;
+      // Prepare modal content - ONLY show this final modal
+      if (response?.warnings && Array.isArray(response.warnings) && response.warnings.length > 0) {
+        const warnMsg = response.warnings.join("\n\n");
+        setModal({
+          visible: true,
+          type: "error",
+          message: `Signup completed with warnings:\n\n${warnMsg}\n\nRedirecting to login in 5 seconds...`,
+        });
+      } else {
+        setModal({
+          visible: true,
+          type: "success",
+          message: `Signup complete for ${userName || "your account"}! Redirecting to login in 5 seconds...`,
+        });
       }
 
-      // Step 3: Success
-      window.alert(`Signup complete for ${userName || "your account"}! You can now login.`);
+      // auto-redirect after 5s; user can click the button to go immediately
+      timerRef.current = window.setTimeout(goToLoginImmediate, 5000);
+
+      // Reset form locally
       setStep(1);
       setId("");
       setPassword("");
@@ -226,11 +293,10 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
       setEmailSent(false);
       setVerified(false);
       setInputError(null);
-      if (onBackToLogin) onBackToLogin();
-      else window.location.href = "/modules/authentication";
-
     } catch (e: any) {
-      window.alert(e.message || "Failed to complete signup");
+      const errMsg = e?.message || "Failed to complete signup";
+      setModal({ visible: true, type: "error", message: `${errMsg}\n\nRedirecting to login in 5 seconds...` });
+      timerRef.current = window.setTimeout(goToLoginImmediate, 5000);
     }
   };
 
@@ -244,6 +310,12 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
     setInputError(null);
     if (onBackToLogin) onBackToLogin();
   };
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, []);
 
   return (
     <>
@@ -369,16 +441,20 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
               {codeError && <div className="text-red-500 text-xs mb-2">{codeError}</div>}
               <Button
                 onClick={handleSendEmail}
-                className="w-full bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 h-10 text-base rounded-lg mb-2"
-                disabled={resendCount >= 3}
+                className="w-full bg-gradient-to-r from-blue-700 to-blue-400 text-white hover:from-blue-800 hover:to-blue-500 h-10 text-base rounded-lg mb-2 disabled:opacity-50"
+                disabled={isLoading || resendCount >= 3}
               >
-                Resend Code
+                {isLoading ? "Sending..." : resendCount >= 3 ? "Resend Disabled" : `Resend Code (${Math.max(0, 3 - resendCount)} left)`}
               </Button>
+
               <div className="text-xs text-gray-500 mb-2 text-center">
-                {resendCount >= 3
+                {resendCount <= 0
+                  ? "You can resend the code 3 more time(s) today."
+                  : resendCount >= 3
                   ? "You have reached the maximum number of resends for today."
-                  : `You can resend the code ${3 - resendCount} more time(s) today.`}
+                  : `You can resend the code ${Math.max(0, 3 - resendCount)} more time(s) today.`}
               </div>
+
               <Button
                 onClick={handleBack}
                 className="w-full bg-gray-200 text-blue-900 hover:bg-gray-300 h-10 text-base rounded-lg"
@@ -409,7 +485,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
               <label className="block mb-2 text-blue-900 text-base font-semibold">Password</label>
               <div className="relative">
                 <Input
-                  type={showPassword ? "text" : "password"}
+                  type="password"
                   value={password}
                   onChange={e => handlePasswordChange(e.target.value)} 
                   placeholder="Enter password (8-64 chars, no spaces)"
@@ -418,17 +494,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
                   }`}
                 />
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
-                <button
-                  type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-400 hover:text-blue-700 transition"
-                  onClick={() => setShowPassword(v => !v)}
-                  tabIndex={-1}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                </button>
               </div>
-              {/* ✅ Show password validation error */}
               {passwordError && (
                 <div className="mt-1 text-red-500 text-xs">
                   {passwordError}
@@ -439,7 +505,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
               <label className="block mb-2 text-blue-900 text-base font-semibold">Confirm Password</label>
               <div className="relative">
                 <Input
-                  type={showConfirm ? "text" : "password"}
+                  type="password"
                   value={confirm}
                   onChange={e => handleConfirmChange(e.target.value)} 
                   placeholder="Confirm password"
@@ -448,17 +514,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
                   }`}
                 />
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
-                <button
-                  type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-400 hover:text-blue-700 transition"
-                  onClick={() => setShowConfirm(v => !v)}
-                  tabIndex={-1}
-                  aria-label={showConfirm ? "Hide password" : "Show password"}
-                >
-                  {showConfirm ? <EyeOff size={20} /> : <Eye size={20} />}
-                </button>
               </div>
-              {/* ✅ Show confirm validation error */}
               {confirmError && (
                 <div className="mt-1 text-red-500 text-xs">
                   {confirmError}
@@ -475,6 +531,36 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
             </Button>
           </div>
         </>
+      )}
+
+      {/* Modal / toast overlay shown ONLY at final completion (warning/success) */}
+      {modal.visible && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative max-w-lg w-full mx-4 bg-white rounded-lg shadow-lg p-6 text-center">
+            <h3 className={`text-lg font-semibold mb-2 ${modal.type === "error" ? "text-red-600" : "text-green-600"}`}>
+              {modal.type === "error" ? "Notice" : "Success"}
+            </h3>
+            <p className="whitespace-pre-wrap text-sm text-gray-800 mb-4">{modal.message}</p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={goToLoginImmediate}
+                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                Go to Login Now
+              </button>
+              <button
+                onClick={() => {
+                  // close modal but still redirect after timeout if running
+                  setModal(v => ({ ...v, visible: false }));
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

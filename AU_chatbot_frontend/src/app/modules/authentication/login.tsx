@@ -39,6 +39,17 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
 
+  // When role changes clear id/password and related errors
+  const handleRoleChange = (value: string) => {
+    setRole(value);
+    setId("");
+    setPassword("");
+    setPasswordError(null);
+    setError(null);
+    setShowPassword(false);
+    setShowMsg(false);
+  };
+
   const currentRole = roleOptions.find(r => r.value === role);
 
   const validatePassword = (password: string): string | null => {
@@ -85,6 +96,7 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
         `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/authentication/login`,
         {
           method: "POST",
+          credentials: "include", // <-- ensure cookies are sent/received
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ college, role, id, password }),
         }
@@ -108,11 +120,11 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
         
         if (data && data.message) {
           if (typeof data.message === "string") {
-            errorMessage = data.message.message;
+            errorMessage = data.message;
           } else if (typeof data.message === "object") {
-            errorMessage = String(JSON.stringify(data.message.message));
+            errorMessage = String(JSON.stringify(data.message));
           } else {
-            errorMessage = String(data.message.message);
+            errorMessage = String(data.message);
           }
         } else if (data && data.error && typeof data.error === "string" && data.error !== "Bad Request") {
           errorMessage = data.error;
@@ -126,118 +138,165 @@ export default function LoginPage({ showDialog }: LoginPageProps) {
       const data = await res.json();
       console.log("Login successful:", data);
 
+      // Store user data in localStorage
       localStorage.setItem("userName", data.user.name || "Guest");
       localStorage.setItem("userRole", role);
       localStorage.setItem("userId", id);
       localStorage.setItem("userCollege", college);
 
-      router.push("/modules/chatbot");
+      // Check if user is admin and redirect accordingly
+      if (role === "admin") {
+        // Admin users go to admin dashboard
+        console.log("Admin login detected, redirecting to admin dashboard");
+        router.push("/modules/admin");
+      } else {
+        // Regular users go to chatbot
+        console.log("Regular user login, redirecting to chatbot");
+        router.push("/modules/chatbot");
+      }
     } catch (err: any) {
       console.error("Network/fetch error:", err);
       setError("Network error. Please try again.");
     }
   };
 
+  // Hide native browser clear/reveal UI so only your custom eye toggle is visible
+  const nativeInputHideStyles = `
+    /* IE / Edge */
+    input[type="password"]::-ms-clear,
+    input[type="password"]::-ms-reveal {
+      display: none;
+      width: 0;
+      height: 0;
+    }
+
+    /* WebKit browsers (Chrome / Safari) - common clear/reveal/auto-fill buttons */
+    input[type="password"]::-webkit-clear-button,
+    input[type="password"]::-webkit-contacts-auto-fill-button,
+    input[type="password"]::-webkit-search-decoration,
+    input[type="password"]::-webkit-search-cancel-button,
+    input[type="password"]::-webkit-search-results-button,
+    input[type="password"]::-webkit-search-results-decoration,
+    input[type="password"]::-webkit-credentials-auto-fill-button {
+      display: none !important;
+      width: 0;
+      height: 0;
+      -webkit-appearance: none;
+    }
+
+    /* disable inner spin buttons if any */
+    input[type="password"]::-webkit-inner-spin-button,
+    input[type="password"]::-webkit-outer-spin-button {
+      -webkit-appearance: none;
+      margin: 0;
+    }
+  `;
+
   return (
-    <form
-      onSubmit={handleLogin}
-      className="space-y-4 min-h-[400px] flex flex-col justify-center"
-    >
-      <div>
-        <label className="block mb-2 text-blue-900 text-sm font-semibold">College</label>
-        <div className="relative">
-          <Select value={college} onValueChange={setCollege}>
+    <>
+      {/* global styles to hide native password clear/reveal so only the custom eye icon shows */}
+      <style jsx global>{nativeInputHideStyles}</style>
+
+      <form
+        onSubmit={handleLogin}
+        className="space-y-4 min-h-[400px] flex flex-col justify-center"
+      >
+        <div>
+          <label className="block mb-2 text-blue-900 text-sm font-semibold">College</label>
+          <div className="relative">
+            <Select value={college} onValueChange={setCollege}>
+              <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
+                <SelectValue placeholder="Select college" />
+              </SelectTrigger>
+              <SelectContent className="bg-white text-blue-900 border-blue-400">
+                {collegeOptions.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            </div>
+        </div>
+        <div>
+          <label className="block mb-2 text-blue-900 text-sm font-semibold">Role</label>
+          <Select value={role} onValueChange={handleRoleChange}>
             <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
-              <SelectValue placeholder="Select college" />
+              <SelectValue placeholder="Select role" />
             </SelectTrigger>
             <SelectContent className="bg-white text-blue-900 border-blue-400">
-              {collegeOptions.map(opt => (
+              {roleOptions.map(opt => (
                 <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
                   {opt.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+        </div>
+        <div>
+          <label className="block mb-2 text-blue-900 text-sm font-semibold">
+            {currentRole?.idLabel}
+          </label>
+          <div className="relative">
+            <Input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={id}
+              onChange={e => setId(e.target.value.replace(/\D/, ""))}
+              placeholder={`Enter your ${currentRole?.idLabel}`}
+              className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
+            />
+            <User className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
           </div>
-      </div>
-      <div>
-        <label className="block mb-2 text-blue-900 text-sm font-semibold">Role</label>
-        <Select value={role} onValueChange={setRole}>
-          <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
-            <SelectValue placeholder="Select role" />
-          </SelectTrigger>
-          <SelectContent className="bg-white text-blue-900 border-blue-400">
-            {roleOptions.map(opt => (
-              <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <div>
-        <label className="block mb-2 text-blue-900 text-sm font-semibold">
-          {currentRole?.idLabel}
-        </label>
-        <div className="relative">
-          <Input
-            type="text"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            value={id}
-            onChange={e => setId(e.target.value.replace(/\D/, ""))}
-            placeholder={`Enter your ${currentRole?.idLabel}`}
-            className="bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300"
-          />
-          <User className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
         </div>
-      </div>
-      <div>
-        <label className="block mb-2 text-blue-900 text-sm font-semibold">Password</label>
-        <div className="relative">
-          <Input
-            type={showPassword ? "text" : "password"}
-            value={password}
-            onChange={e => handlePasswordChange(e.target.value)}
-            placeholder="Enter your password"
-            className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
-              passwordError ? "border-red-500" : ""
-            }`}
-            autoComplete="current-password"
-          />
-          <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
-          <button
-            type="button"
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-400 hover:text-blue-700 transition"
-            onClick={() => setShowPassword(v => !v)}
-            tabIndex={-1}
-          >
-            {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-          </button>
+        <div>
+          <label className="block mb-2 text-blue-900 text-sm font-semibold">Password</label>
+          <div className="relative">
+            <Input
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={e => handlePasswordChange(e.target.value)}
+              placeholder="Enter your password"
+              className={`bg-white text-blue-900 border-blue-400 h-10 px-10 text-sm rounded-lg focus:border-cyan-400 focus:ring-2 focus:ring-cyan-200 transition-all duration-300 ${
+                passwordError ? "border-red-500" : ""
+              }`}
+              autoComplete="current-password"
+            />
+            <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" size={16} />
+            <button
+              type="button"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-400 hover:text-blue-700 transition"
+              onClick={() => setShowPassword(v => !v)}
+              tabIndex={-1}
+            >
+              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          {passwordError && (
+            <div className="mt-1 text-red-600 text-xs">
+              {passwordError}
+            </div>
+          )}
         </div>
-        {passwordError && (
-          <div className="mt-1 text-red-600 text-xs">
-            {passwordError}
+        <Button
+          type="submit"
+          className="w-full bg-gradient-to-r from-blue-700 to-blue-500 text-white hover:from-blue-800 hover:to-cyan-500 h-10 text-sm font-bold rounded-lg transition-all duration-300 hover:scale-105"
+          disabled={!!passwordError}
+        >
+          Login
+        </Button>
+        {showMsg && (
+          <div className="mt-2 text-green-600 text-center text-sm">
+            Ready to go to {role === "admin" ? "admin dashboard" : "chatbot"}!
           </div>
         )}
-      </div>
-      <Button
-        type="submit"
-        className="w-full bg-gradient-to-r from-blue-700 to-blue-500 text-white hover:from-blue-800 hover:to-cyan-500 h-10 text-sm font-bold rounded-lg transition-all duration-300 hover:scale-105"
-        disabled={!!passwordError}
-      >
-        Login
-      </Button>
-      {showMsg && (
-        <div className="mt-2 text-green-600 text-center text-sm">
-          Ready to go to chatbot!
-        </div>
-      )}
-      {error && (
-        <div className="mt-2 text-red-600 text-center text-sm">
-          {error}
-        </div>
-      )}
-    </form>
+        {error && (
+          <div className="mt-2 text-red-600 text-center text-sm">
+            {error}
+          </div>
+        )}
+      </form>
+    </>
   );
 }

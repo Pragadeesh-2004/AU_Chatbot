@@ -7,7 +7,11 @@ import { AddSessionDto } from "./dto/add-session.dto";
 import { AddQADto } from "./dto/add-qa.dto";
 import { DeleteSessionDto } from "./dto/delete-session.dto";
 import { DeleteUserDto } from "./dto/delete-user.dto";
-import { AdminService } from '../admin/admin.service'; 
+import { AdminService } from '../admin/admin.service';
+// ✅ Add these imports for HTTP requests
+import { ConfigService } from '@nestjs/config';
+import fetch from 'node-fetch'; // You might need to install: npm install node-fetch @types/node-fetch
+
 const ROLE_CONFIG = {
   student: {
     array: "student",
@@ -35,7 +39,8 @@ const ROLE_CONFIG = {
 export class ChatbotService {
   constructor(
     @InjectConnection("university") private universityConnection: Connection,
-    private adminService: AdminService // Inject AdminService
+    private adminService: AdminService,
+    public configService: ConfigService // ✅ Make configService public for guest access
   ) {}
 
   private calcTokensFromText(text?: string) {
@@ -44,20 +49,120 @@ export class ChatbotService {
     return Math.ceil(s.length / 4); // 1 token per 4 characters
   }
 
+  // ✅ Make this method public so GuestChatbotController can use it
+  async callPythonOrchestration(role: string, id: string, question: string, files?: any[]): Promise<string> {
+    try {
+      // Get Python orchestration URL from environment variables
+      const pythonServiceUrl = this.configService.get<string>('PYTHON_ORCHESTRATION_URL') || 
+                              'https://your-python-codespace-url.app.github.dev'; // Replace with actual URL
+      
+      console.log('Calling Python orchestration service:', pythonServiceUrl);
+
+      // Prepare the payload for Python service
+      const payload = {
+        user_query: question,
+        role,
+        id,
+        file: files || []
+      };
+
+      // Make HTTP request to Python orchestration service
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
+      const fetch = (await import('node-fetch')).default;
+      const response = await fetch(`${pythonServiceUrl}/process/json`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        console.error('Python orchestration service error:', response.status, response.statusText);
+        throw new Error(`Python service error: ${response.status} ${response.statusText}`);
+      }
+
+      const responseData = await response.json() as any;
+      
+      // Extract the answer from the response
+      const answer = responseData.answer || responseData.response || responseData.message || "I apologize, but I couldn't process your request at the moment.";
+      
+      console.log('Received response from Python orchestration service');
+      return answer;
+
+    } catch (error) {
+      console.error('Error calling Python orchestration service:', error);
+      
+      // Return different error messages based on error type
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        return "I'm temporarily unavailable due to a service connection issue. Please try again in a moment.";
+      } else if (error.name === 'AbortError' || error.message.includes('timeout')) {
+        return "I'm taking too long to respond. Please try with a simpler question or try again later.";
+      } else {
+        return "I encountered an error while processing your request. Please try again or rephrase your question.";
+      }
+    }
+  }
+
   async addUser(dto: CreateUserDto) {
-    const config = ROLE_CONFIG[dto.role];
-    const docId = new Types.ObjectId(config.doc);
-    const userObj: any = {
-      [config.idField]: dto.id,
-      name: dto.name,
-      sessions: []
-    };
-    console.log("Creating user:", userObj, "in doc:", docId.toString());
-    await this.universityConnection.collection("memory").updateOne(
-      { _id: docId },
-      { $push: { [config.array]: userObj } as any }
-    );
-    return { success: true };
+    try {
+      const config = ROLE_CONFIG[dto.role];
+      if (!config) {
+        throw new Error(`Invalid role: ${dto.role}`);
+      }
+
+      const docId = new Types.ObjectId(config.doc);
+      const userObj: any = {
+        [config.idField]: dto.id,
+        name: dto.name,
+        sessions: []
+      };
+
+      // Ensure memory document exists
+      const existingDoc = await this.universityConnection
+        .collection("memory")
+        .findOne({ _id: docId });
+      
+      if (!existingDoc) {
+        console.error(`Memory document not found for ID: ${docId.toString()}`);
+        throw new Error(`Memory document not found for role: ${dto.role}`);
+      }
+
+      // push only if user not present (idempotent)
+      const pushResult = await this.universityConnection.collection("memory").updateOne(
+        { _id: docId, [`${config.array}.${config.idField}`]: { $ne: dto.id } },
+        { $push: { [config.array]: userObj } as any }
+      );
+
+      // If doc not matched -> weird, throw
+      if (pushResult.matchedCount === 0) {
+        throw new Error(`Memory document with ID ${docId.toString()} not found`);
+      }
+
+      // If modifiedCount === 0 then user already existed — treat as success
+      if ((pushResult.modifiedCount ?? 0) === 0) {
+        console.log(`User ${dto.id} already exists in memory (${config.array}), skipping creation.`);
+        return { success: true, alreadyExists: true };
+      }
+
+      console.log("User added to memory:", dto.id);
+      return { success: true, created: true };
+    } catch (error) {
+      console.error("addUser error details:", {
+        message: error?.message,
+        stack: error?.stack,
+        role: dto.role,
+        id: dto.id,
+        name: dto.name
+      });
+      throw error;
+    }
   }
 
   async addSession(dto: AddSessionDto) {
@@ -133,9 +238,8 @@ export class ChatbotService {
     const config = ROLE_CONFIG[dto.role];
     const docId = new Types.ObjectId(config.doc);
 
-    // compute tokens
+    // compute tokens for the question (we'll recalculate output tokens after getting response)
     const inputTokens = this.calcTokensFromText(dto.question);
-    const outputTokensEstimate = this.calcTokensFromText(dto.answer);
 
     // ===== robust user balance lookup =====
     let rlDoc = await this.universityConnection
@@ -194,7 +298,6 @@ export class ChatbotService {
         };
       }
       
-      // ✅ Add this file size validation per file in MB
       for (const file of dto.files) {
         if (file.size > maxFileSize * 1024 * 1024) {
           return {
@@ -211,7 +314,7 @@ export class ChatbotService {
     const availableInput = Number(rlUser.balance_input_token_per_day ?? 0);
     const availableOutput = Number(rlUser.balance_output_token_per_day ?? 0);
 
-    // token checks with clear messages (reset time included)
+    // Check input tokens
     if (availableInput < inputTokens) {
       return {
         error: `Input token exhausted. Your input requires ${inputTokens} tokens but you have ${availableInput}. Balances reset daily at 12:00 AM.`,
@@ -220,23 +323,37 @@ export class ChatbotService {
         balance: availableInput
       };
     }
-    if (availableOutput < outputTokensEstimate) {
+
+    // ✅ Call Python orchestration service to get real response
+    let actualAnswer: string;
+    try {
+      actualAnswer = await this.callPythonOrchestration(dto.role, dto.id, dto.question, dto.files);
+    } catch (error) {
+      console.error('Failed to get response from Python orchestration:', error);
+      actualAnswer = "I'm experiencing technical difficulties. Please try again later.";
+    }
+
+    // ✅ Calculate actual output tokens based on the real response
+    const actualOutputTokens = this.calcTokensFromText(actualAnswer);
+
+    // Check if we have enough output tokens for the actual response
+    if (availableOutput < actualOutputTokens) {
       return {
-        error: `Output token exhausted. Estimated response requires ${outputTokensEstimate} tokens but you have ${availableOutput}. Balances reset daily at 12:00 AM.`,
+        error: `Output token exhausted. Response requires ${actualOutputTokens} tokens but you have ${availableOutput}. Balances reset daily at 12:00 AM.`,
         code: "OUTPUT_TOKEN_EXHAUSTED",
-        needed: outputTokensEstimate,
+        needed: actualOutputTokens,
         balance: availableOutput
       };
     }
 
-    // push QA into session (try matching session first)
+    // push QA into session with the REAL answer (try matching session first)
     const result = await this.universityConnection.collection("memory").updateOne(
       { _id: docId },
       {
         $push: {
           [`${config.array}.$[stud].sessions.$[sess].qa`]: {
             question: dto.question,
-            answer: dto.answer,
+            answer: actualAnswer, // ✅ Use real answer from Python orchestration
             timestamp: dto.timestamp
           }
         } as any
@@ -258,16 +375,20 @@ export class ChatbotService {
             [`${config.array}.$.sessions`]: {
               session_id: dto.session_id,
               session_name: (dto as any).session_name ?? `Session ${dto.session_id}`,
-              qa: [{ question: dto.question, answer: dto.answer, timestamp: dto.timestamp }]
+              qa: [{ 
+                question: dto.question, 
+                answer: actualAnswer, // ✅ Use real answer from Python orchestration
+                timestamp: dto.timestamp 
+              }]
             }
           } as any
         }
       );
     }
 
-    // deduct tokens AND request count AND file count via admin service
+    // deduct actual tokens AND request count AND file count via admin service
     try {
-      await this.adminService.adjustUserTokens(dto.role, dto.id, inputTokens, outputTokensEstimate);
+      await this.adminService.adjustUserTokens(dto.role, dto.id, inputTokens, actualOutputTokens); // ✅ Use actual output tokens
       // Deduct 1 request for this chat message
       await this.adminService.adjustUserRequests(dto.role, dto.id, 1);
       // Deduct file count if files were uploaded
@@ -278,7 +399,7 @@ export class ChatbotService {
       console.error("Failed to adjust user tokens/requests/files:", err);
     }
 
-    return { success: true };
+    return { success: true, answer: actualAnswer, tokens_used: { input: inputTokens, output: actualOutputTokens } };
   }
 
   async deleteSession(dto: DeleteSessionDto) {

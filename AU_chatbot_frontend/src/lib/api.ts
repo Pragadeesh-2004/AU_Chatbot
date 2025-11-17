@@ -1,5 +1,5 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3000';
 
 export class ApiClient {
   private baseURL: string;
@@ -71,13 +71,25 @@ export class ApiClient {
 
 export const apiClient = new ApiClient();
 
-export async function apiPost(path: string, data: any) {
+export async function apiPost(path: string, body: any, opts: RequestInit = {}) {
   const res = await fetch(`${API_BASE}/authentication/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+    method: 'POST',
+    credentials: 'include', // <- must include cookies
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    ...opts,
   });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error || json.message || "API error");
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.message || res.statusText);
+  return json;
+}
+
+export async function apiGet(path: string, opts: RequestInit = {}) {
+  const res = await fetch(`${API_BASE}/${path}`, {
+    credentials: 'include', // <- must include cookies
+    ...opts,
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.message || res.statusText);
   return json;
 }

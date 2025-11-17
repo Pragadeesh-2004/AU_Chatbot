@@ -412,14 +412,88 @@ export class AdminService {
   }
 
   // Get user data for admin dashboard
-  getUserData() {
+  async getUserData() {
+    const userStats = await this.getUserStatistics();
     return [
-      { id: 1, name: 'Guest Users', role: 'guest', count: 0 },
-      { id: 2, name: 'Students', role: 'student', count: 0 },
-      { id: 3, name: 'Faculty', role: 'faculty', count: 0 },
-      { id: 4, name: 'Scholars', role: 'scholar', count: 0 },
-      { id: 5, name: 'Officials', role: 'official', count: 0 },
+      { id: 1, name: 'Students', role: 'student', count: userStats.students },
+      { id: 2, name: 'Faculty', role: 'faculty', count: userStats.faculty },
+      { id: 3, name: 'Scholars', role: 'scholar', count: userStats.scholars },
+      { id: 4, name: 'Officials', role: 'official', count: userStats.officials },
     ];
+  }
+
+  // Get user statistics for dashboard
+  async getUserStatistics() {
+    try {
+      const universityObjectId = new Types.ObjectId("68d3d10671bbe5af3a79a45b");
+      const doc = await this.universityConnection.collection('user').findOne({ _id: universityObjectId });
+      
+      if (!doc) {
+        return {
+          students: 0,
+          faculty: 0,
+          scholars: 0,
+          officials: 0,
+          total: 0
+        };
+      }
+
+      const students = Array.isArray(doc.students) ? doc.students.length : 0;
+      const faculty = Array.isArray(doc.faculty) ? doc.faculty.length : 0;
+      const scholars = Array.isArray(doc.scholars) ? doc.scholars.length : 0;
+      const officials = Array.isArray(doc.officials) ? doc.officials.length : 0;
+      const total = students + faculty + scholars + officials;
+
+      return {
+        students,
+        faculty,
+        scholars,
+        officials,
+        total
+      };
+    } catch (error) {
+      console.error('Error getting user statistics:', error);
+      return {
+        students: 0,
+        faculty: 0,
+        scholars: 0,
+        officials: 0,
+        total: 0
+      };
+    }
+  }
+
+  // Get guest statistics for dashboard
+  async getGuestStatistics() {
+    try {
+      const universityObjectId = new Types.ObjectId("68d3d10671bbe5af3a79a45b");
+      const doc = await this.universityConnection.collection('user').findOne({ _id: universityObjectId });
+      
+      if (!doc || !doc.visit) {
+        return {
+          visitor: 0,
+          university_member: 0,
+          total: 0
+        };
+      }
+
+      const visitor = parseInt(doc.visit.visitor || '0', 10);
+      const university_member = parseInt(doc.visit.university_member || '0', 10);
+      const total = visitor + university_member;
+
+      return {
+        visitor,
+        university_member,
+        total
+      };
+    } catch (error) {
+      console.error('Error getting guest statistics:', error);
+      return {
+        visitor: 0,
+        university_member: 0,
+        total: 0
+      };
+    }
   }
 
   // Add this helper to set memory_count_used for a user (uses admin ROLE_CONFIG docId)

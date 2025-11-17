@@ -7,7 +7,10 @@ import { DeleteSessionDto } from "./dto/delete-session.dto";
 import { DeleteUserDto } from "./dto/delete-user.dto";
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { File as MulterFile } from "multer";
+import { UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from 'src/auth/jwt-auth.guard';
 
+@UseGuards(JwtAuthGuard)
 @Controller("chatbot")
 export class ChatbotController {
     constructor(private readonly chatbotService: ChatbotService) {}
@@ -32,13 +35,38 @@ export class ChatbotController {
 
     @Post("add-qa")
     async addQA(@Body() dto: AddQADto) {
-        const result = await this.chatbotService.addQA(dto);
-        const resAny = result as any;
-        if (resAny?.error) {
-            throw new HttpException({ message: resAny.error }, HttpStatus.INTERNAL_SERVER_ERROR);
+        try {
+            const result = await this.chatbotService.addQA(dto);
+            const resAny = result as any;
+            
+            if (resAny?.error) {
+                // Return appropriate HTTP status for different error types
+                if (resAny.code === "INPUT_TOKEN_EXHAUSTED" || 
+                    resAny.code === "OUTPUT_TOKEN_EXHAUSTED" || 
+                    resAny.code === "REQUEST_LIMIT_EXHAUSTED" ||
+                    resAny.code === "FILE_COUNT_EXHAUSTED" ||
+                    resAny.code === "FILE_SIZE_EXCEEDED") {
+                    throw new HttpException({ 
+                        message: resAny.error, 
+                        code: resAny.code,
+                        needed: resAny.needed,
+                        balance: resAny.balance,
+                        fileName: resAny.fileName 
+                    }, HttpStatus.BAD_REQUEST);
+                }
+                throw new HttpException({ message: resAny.error }, HttpStatus.INTERNAL_SERVER_ERROR);
+            }
+            
+            return result;
+        } catch (error) {
+            if (error instanceof HttpException) {
+                throw error;
+            }
+            console.error('Unexpected error in addQA:', error);
+            throw new HttpException({ message: 'Internal server error' }, HttpStatus.INTERNAL_SERVER_ERROR);
         }
-        return result;
     }
+    
 
     @Delete("delete-session")
     async deleteSession(@Body() dto: DeleteSessionDto) {

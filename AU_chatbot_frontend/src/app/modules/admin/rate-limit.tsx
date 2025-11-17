@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, Edit, Save, X } from "lucide-react";
+import { ArrowLeft, Edit, Save, X, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
 import { z } from "zod";
 
 // Simple Dialog component
@@ -41,7 +41,7 @@ const roleOptions = [
   { value: "student", label: "Student" },
 ];
 
-export default function RateLimitDashboard() {
+export default function RateLimitDashboard({ onBack }: { onBack?: () => void }) {
   const router = useRouter();
   const [selectedRole, setSelectedRole] = useState("guest");
   const [isEditing, setIsEditing] = useState(false);
@@ -65,12 +65,6 @@ export default function RateLimitDashboard() {
   const [dialogMessage, setDialogMessage] = useState("");
 
   useEffect(() => {
-    localStorage.removeItem("userId");
-    localStorage.removeItem("userName");
-    localStorage.removeItem("userRole");
-  }, []);
-
-  useEffect(() => {
     fetchRateLimits();
   }, [selectedRole]);
 
@@ -85,7 +79,8 @@ export default function RateLimitDashboard() {
     setLoading(true);
     try {
       const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/admin/rate-limits/${selectedRole}`
+        `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/admin/rate-limits/${selectedRole}`,
+        { credentials: 'include' }
       );
       if (res.ok) {
         const data = await res.json();
@@ -99,13 +94,25 @@ export default function RateLimitDashboard() {
         };
         setCurrentData(mappedData);
         setEditData(mappedData);
+      } else {
+        throw new Error("Failed to fetch rate limits");
       }
     } catch (err) {
       setDialogType("error");
       setDialogMessage("Failed to fetch rate limits.");
       setDialogOpen(true);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
+  };
+
+  // Back handler: prefer parent callback (page.tsx) else navigate to admin route
+  const handleBack = () => {
+    if (typeof onBack === "function") {
+      onBack();
+    } else {
+      router.push("/modules/admin");
+    }
   };
 
   const handleEdit = () => {
@@ -137,6 +144,7 @@ export default function RateLimitDashboard() {
         `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/admin/rate-limits/${selectedRole}`,
         {
           method: "PUT",
+          credentials: 'include',
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         }
@@ -163,14 +171,27 @@ export default function RateLimitDashboard() {
         setDialogMessage("Failed to save changes.");
         setDialogOpen(true);
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleInputChange = (field: keyof RateLimitData, value: string) => {
     const numValue = value === "" ? 0 : Number(value);
     setEditData(prev => ({ ...prev, [field]: numValue }));
   };
+
+  // show the consistent loading screen (same UX as user-data)
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-12 h-12 text-cyan-400 animate-spin mx-auto mb-4" />
+          <p className="text-cyan-200 text-lg">Loading rate limit settings...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800">
@@ -186,7 +207,7 @@ export default function RateLimitDashboard() {
             variant="ghost"
             size="icon"
             className="text-cyan-300 hover:bg-blue-900"
-            onClick={() => router.push("/modules/admin")}
+            onClick={handleBack}
           >
             <ArrowLeft size={20} />
           </Button>
@@ -227,10 +248,6 @@ export default function RateLimitDashboard() {
               </Button>
             )}
           </div>
-
-          {loading && (
-            <div className="text-center text-cyan-200 mb-4">Loading...</div>
-          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>

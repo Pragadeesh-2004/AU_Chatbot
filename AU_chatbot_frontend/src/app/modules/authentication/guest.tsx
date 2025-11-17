@@ -23,22 +23,33 @@ export default function GuestPage() {
 
   const handleContinue = async () => {
     try {
-      await fetch(
+      // ✅ Map frontend guestType to backend expected format
+      const backendGuestType = guestType === "university" ? "university_member" : "visitor";
+      
+      const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000"}/authentication/guest-visit`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ college, guestType }),
+          body: JSON.stringify({ 
+            college, 
+            guestType: backendGuestType  // ✅ Send correct format
+          }),
         }
       );
+
+      if (!response.ok) {
+        console.warn('Guest visit tracking failed, but continuing to chatbot');
+      }
     } catch (e) {
-      // handle error if needed
+      console.warn('Guest visit tracking error, but continuing to chatbot:', e);
     }
     
     // Store college info in localStorage for guest session
     localStorage.setItem("guestCollege", college);
     localStorage.setItem("guestType", guestType);
     
+    // ✅ Navigate to guest chat page instead of regular chatbot
     router.push("/modules/chatbot");
   };
 
@@ -59,7 +70,6 @@ export default function GuestPage() {
               ))}
             </SelectContent>
           </Select>
-          {/* <GraduationCap className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400 pointer-events-none" size={16} /> */}
         </div>
       </div>
       <div>

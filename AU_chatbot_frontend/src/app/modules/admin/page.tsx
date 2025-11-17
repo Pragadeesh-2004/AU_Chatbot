@@ -1,41 +1,70 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { LogOut, Settings, Users, ArrowLeft } from "lucide-react";
+import { LogOut, Settings, Users, Building, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 
-// Dynamic imports for the components
-const RateLimitDashboard = dynamic(() => import("./rate-limit"), { ssr: false });
-const UserDataDashboard = dynamic(() => import("./user-data"), { ssr: false });
+// provide a loading fallback so clicking "Rate Limit" doesn't show a white page
+const RateLimitDashboard = dynamic(() => import("./rate-limit"), {
+  ssr: false,
+  loading: () => (
+    <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800 flex items-center justify-center">
+      <div className="text-center">
+        <Loader2 className="w-12 h-12 text-cyan-400 animate-spin mx-auto mb-4" />
+        <p className="text-cyan-200 text-lg">Loading rate limit dashboard...</p>
+      </div>
+    </div>
+  )
+}) as unknown as React.ComponentType<{ onBack?: () => void }>;
+
+const UserDataDashboard = dynamic(() => import("./user-data"), { ssr: false }) as unknown as React.ComponentType<{ onBack?: () => void }>;
 
 export default function AdminHomePage() {
   const router = useRouter();
   const [adminName, setAdminName] = useState("Admin");
+  const [adminCollege, setAdminCollege] = useState("");
   const [currentView, setCurrentView] = useState("home");
 
   useEffect(() => {
-    localStorage.removeItem("userId");
-    localStorage.removeItem("userName");
-    localStorage.removeItem("userRole");
-    setAdminName("Admin");
-  }, []);
+    // Get admin info from localStorage
+    const userName = localStorage.getItem("userName");
+    const userRole = localStorage.getItem("userRole");
+    const userCollege = localStorage.getItem("userCollege");
+    
+    // Verify this is actually an admin
+    if (userRole !== "admin") {
+      console.log("Not an admin user, redirecting...");
+      router.push("/modules/authentication");
+      return;
+    }
+    
+    setAdminName(userName || "Admin");
+    setAdminCollege(userCollege === "Anna_university" ? "Anna University" : userCollege || "");
+  }, [router]);
 
   const handleLogout = () => {
     localStorage.removeItem("userId");
     localStorage.removeItem("userName");
     localStorage.removeItem("userRole");
+    localStorage.removeItem("userCollege");
     router.push("/modules/authentication");
+  };
+
+  const handleBackToChatbot = () => {
+    // Admin can still access chatbot if needed
+    router.push("/modules/chatbot");
   };
 
   // Render different views based on currentView state
   if (currentView === "rate-limit") {
-    return <RateLimitDashboard />;
+    return <RateLimitDashboard onBack={() => setCurrentView("home")} />;
   }
 
   if (currentView === "user-data") {
-    return <UserDataDashboard />;
+    // pass onBack so the child can return to the admin home without a full route change
+    return <UserDataDashboard onBack={() => setCurrentView("home")} />;
   }
 
   // Default home view
@@ -43,15 +72,15 @@ export default function AdminHomePage() {
     <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800">
       <div className="flex justify-between items-center p-6 border-b border-blue-800">
         <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-cyan-300 hover:bg-blue-900"
-            onClick={() => router.push("/modules/chatbot")}
-          >
-            <ArrowLeft size={20} />
-          </Button>
-          <h1 className="text-2xl font-bold text-cyan-100">Admin Dashboard</h1>
+          <div className="flex flex-col">
+            <h1 className="text-2xl font-bold text-cyan-100">Admin Dashboard</h1>
+            {adminCollege && (
+              <div className="flex items-center gap-2 text-cyan-300 text-sm">
+                <Building size={14} />
+                <span>{adminCollege}</span>
+              </div>
+            )}
+          </div>
         </div>
         <Button
           variant="ghost"
@@ -66,10 +95,15 @@ export default function AdminHomePage() {
       <div className="flex flex-col items-center justify-center min-h-[calc(100vh-120px)] p-6">
         <div className="max-w-2xl w-full">
           <div className="text-center mb-12">
-            <h2 className="text-4xl font-bold text-cyan-100 mb-4">
+            <h2 className="text-4xl font-bold text-cyan-100 mb-2">
               Welcome, {adminName}!
             </h2>
-            <p className="text-cyan-200 text-lg">
+            {adminCollege && (
+              <p className="text-cyan-300 text-lg mb-4">
+                {adminCollege} Administrator
+              </p>
+            )}
+            <p className="text-cyan-200 text-base">
               Manage your system settings and monitor user data from here.
             </p>
           </div>
