@@ -1,40 +1,90 @@
-import { Controller, Post, Body, Req, UseInterceptors, UploadedFiles, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, Req, Res, UseInterceptors, UploadedFiles, HttpException, HttpStatus } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
-import { File as MulterFile } from 'multer';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { Public } from '../auth/public.decorator';
 import { GuestRateLimitService } from './guest-rate-limit.service';
-import { ChatbotService } from '../chatbot/chatbot.service';
 import { ConfigService } from '@nestjs/config';
+import * as fs from 'fs'; // ✅ Add file system import
+import * as path from 'path'; // ✅ Add path import
 
-@Public() // No JWT required for guest endpoints
+@Public()
 @Controller('guest-chatbot')
 export class GuestChatbotController {
   constructor(
     private guestRateLimitService: GuestRateLimitService,
-    private chatbotService: ChatbotService, // Inject ChatbotService to reuse the Python orchestration
-    private configService: ConfigService // Add ConfigService injection
+    private configService: ConfigService
   ) {}
+
+  @Post('set-college')
+  async setCollege(
+    @Body() body: { college: string },
+    @Req() req: Request,
+    @Res() res: Response
+  ) {
+    try {
+      const collegeName = body.college || 'Anna_university';
+      
+      res.cookie('guestCollege', collegeName, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 24 * 60 * 60 * 1000
+      });
+
+      return res.json({ success: true, college: collegeName });
+    } catch (error) {
+      console.error('Error setting college cookie:', error);
+      throw new HttpException('Failed to set college', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
 
   @Post('send-message')
   @UseInterceptors(AnyFilesInterceptor())
   async sendMessage(
-    @Body() body: { message: string },
-    @UploadedFiles() files: MulterFile[],
+    @UploadedFiles() files: any[],
+    @Body() body: { user_query: string; message?: string; collegeName?: string; role?: string; id?: string },
     @Req() req: Request
   ) {
-    // Extract guest identifier
     const clientIp = this.getClientIp(req);
     const userAgent = req.headers['user-agent'] || '';
     const guestKey = this.guestRateLimitService.generateGuestKey(clientIp, userAgent);
 
-    // Calculate tokens
-    const inputTokens = this.guestRateLimitService.calculateTokens(body.message);
+    const collegeName = body.collegeName || 
+                       req.cookies?.guestCollege || 
+                       'Anna_university';
+
+    const question = body.user_query || body.message || '';
+    
+    if (!question.trim()) {
+      throw new HttpException('Message cannot be empty', HttpStatus.BAD_REQUEST);
+    }
+
+    console.log('\n========== GUEST SEND-MESSAGE DEBUG ==========');
+    console.log('Files array:', files);
+    console.log('Files length:', files?.length);
+    
+    if (files && files.length > 0) {
+      console.log('Files received:');
+      files.forEach((file, index) => {
+        console.log(`\nFile ${index}:`, {
+          keys: Object.keys(file),
+          originalname: file.originalname,
+          mimetype: file.mimetype,
+          size: file.size,
+          path: file.path, // ✅ Show path (from diskStorage)
+          bufferExists: !!file.buffer
+        });
+      });
+    } else {
+      console.log('❌ NO FILES RECEIVED');
+    }
+    console.log('==========================================\n');
+
+    const inputTokens = this.guestRateLimitService.calculateTokens(question);
     const estimatedOutputTokens = Math.max(50, Math.ceil(inputTokens * 2));
     const fileCount = files?.length || 0;
 
     try {
-      // Check rate limits
       const rateLimitCheck = await this.guestRateLimitService.checkGuestRateLimit(
         guestKey,
         inputTokens,
@@ -51,10 +101,14 @@ export class GuestChatbotController {
         }, HttpStatus.TOO_MANY_REQUESTS);
       }
 
-      // Validate file sizes
       if (files && files.length > 0) {
         const maxFileSizeMB = rateLimitCheck.limits.file_size;
+        console.log(`Max file size limit: ${maxFileSizeMB}MB`);
+        
         for (const file of files) {
+          const fileSizeMB = file.size / (1024 * 1024);
+          console.log(`Checking file: ${file.originalname} (${fileSizeMB.toFixed(2)}MB)`);
+          
           if (file.size > maxFileSizeMB * 1024 * 1024) {
             throw new HttpException({
               message: `File "${file.originalname}" exceeds the size limit of ${maxFileSizeMB}MB.`,
@@ -64,134 +118,141 @@ export class GuestChatbotController {
         }
       }
 
-      // ✅ Use the same Python orchestration service as authenticated users
-      const response = await this.callPythonOrchestrationForGuest(
-        guestKey, 
-        body.message, 
-        files
-      );
-      
-      const actualOutputTokens = this.guestRateLimitService.calculateTokens(response);
+      // ✅ FIXED: Read files from disk into buffers
+      const formattedFiles = files && files.length > 0 
+        ? files.map((file: any) => {
+            console.log(`\n🔍 Formatting file: ${file.originalname}`);
+            
+            try {
+              // ✅ Read file from disk path
+              let buffer: Buffer | undefined;
+              
+              if (file.path) {
+                console.log(`  📂 Reading file from disk: ${file.path}`);
+                buffer = fs.readFileSync(file.path);
+                console.log(`  ✅ File read successfully: ${buffer.length} bytes`);
+              } else if (file.buffer) {
+                console.log(`  ✅ File already has buffer: ${file.buffer.length} bytes`);
+                buffer = file.buffer;
+              } else {
+                console.error(`  ❌ ERROR: File has no path and no buffer!`);
+              }
+              
+              return {
+                name: file.originalname || 'document.pdf',
+                size: file.size || 0,
+                type: file.mimetype || 'application/pdf',
+                buffer: buffer, // ✅ Now contains actual buffer
+                path: file.path // ✅ Keep path for cleanup
+              };
+            } catch (readError) {
+              console.error(`  ❌ ERROR reading file: ${readError}`);
+              throw new HttpException(
+                `Failed to read file: ${file.originalname}`,
+                HttpStatus.INTERNAL_SERVER_ERROR
+              );
+            }
+          })
+        : [];
 
-      // Update usage
-      this.guestRateLimitService.updateGuestUsage(
-        guestKey,
-        inputTokens,
-        actualOutputTokens,
-        fileCount
-      );
+      console.log('\n✅ FORMATTED FILES:');
+      formattedFiles.forEach((f, idx) => {
+        console.log(`File ${idx}:`, {
+          name: f.name,
+          size: f.size,
+          type: f.type,
+          bufferExists: !!f.buffer,
+          bufferLength: f.buffer?.length || 0,
+          isBuffer: Buffer.isBuffer(f.buffer)
+        });
+      });
 
-      return {
-        success: true,
-        answer: response, // Changed from 'response' to 'answer' to match frontend expectation
-        tokens_used: {
-          input: inputTokens,
-          output: actualOutputTokens
-        },
-        usage: {
+      try {
+        console.log('\n📤 Calling Python orchestration with formatted files...');
+        const response = await this.guestRateLimitService.callPythonOrchestration(
+          'guest',
+          guestKey,
+          question,
+          formattedFiles,
+          collegeName
+        );
+        
+        console.log('✅ Response received:', response.substring(0, 100));
+        const actualOutputTokens = this.guestRateLimitService.calculateTokens(response);
+
+        this.guestRateLimitService.updateGuestUsage(
+          guestKey,
           inputTokens,
-          outputTokens: actualOutputTokens,
-          filesProcessed: fileCount,
-          remainingLimits: {
-            requests: rateLimitCheck.limits.request_per_day - (rateLimitCheck.usage.requestsUsed + 1),
-            inputTokens: rateLimitCheck.limits.input_token_per_day - (rateLimitCheck.usage.inputTokensUsed + inputTokens),
-            outputTokens: rateLimitCheck.limits.output_token_per_day - (rateLimitCheck.usage.outputTokensUsed + actualOutputTokens),
-            fileUploads: rateLimitCheck.limits.file_count - (rateLimitCheck.usage.filesUploaded + fileCount)
+          actualOutputTokens,
+          fileCount
+        );
+
+        return {
+          success: true,
+          answer: response,
+          collegeName: collegeName,
+          tokens_used: {
+            input: inputTokens,
+            output: actualOutputTokens
+          },
+          usage: {
+            inputTokens,
+            outputTokens: actualOutputTokens,
+            filesProcessed: fileCount,
+            remainingLimits: {
+              requests: rateLimitCheck.limits.request_per_day - (rateLimitCheck.usage.requestsUsed + 1),
+              inputTokens: rateLimitCheck.limits.input_token_per_day - (rateLimitCheck.usage.inputTokensUsed + inputTokens),
+              outputTokens: rateLimitCheck.limits.output_token_per_day - (rateLimitCheck.usage.outputTokensUsed + actualOutputTokens),
+              fileUploads: rateLimitCheck.limits.file_count - (rateLimitCheck.usage.filesUploaded + fileCount)
+            }
           }
+        };
+      } finally {
+        // ✅ Cleanup: Delete uploaded files from disk after processing
+        if (files && files.length > 0) {
+          files.forEach((file: any) => {
+            if (file.path && fs.existsSync(file.path)) {
+              try {
+                fs.unlinkSync(file.path);
+                console.log(`✅ Cleaned up file: ${file.path}`);
+              } catch (unlinkError) {
+                console.warn(`⚠️  Failed to delete file: ${file.path}`, unlinkError);
+              }
+            }
+          });
         }
-      };
+      }
     } catch (error) {
       console.error('Guest message processing error:', error);
+      
+      // ✅ Cleanup on error too
+      if (files && files.length > 0) {
+        files.forEach((file: any) => {
+          if (file.path && fs.existsSync(file.path)) {
+            try {
+              fs.unlinkSync(file.path);
+              console.log(`✅ Cleaned up file on error: ${file.path}`);
+            } catch (unlinkError) {
+              console.warn(`⚠️  Failed to delete file: ${file.path}`, unlinkError);
+            }
+          }
+        });
+      }
+      
       if (error instanceof HttpException) throw error;
       throw new HttpException('Failed to process message', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
-  // ✅ Fixed type issues and use proper ConfigService injection
-  private async callPythonOrchestrationForGuest(
-    guestKey: string, 
-    question: string, 
-    files?: MulterFile[]
-  ): Promise<string> {
-    try {
-      // Use properly injected ConfigService instead of accessing through chatbotService
-      const pythonServiceUrl = this.configService.get('PYTHON_ORCHESTRATION_URL') || 
-                              'https://your-python-codespace-url.app.github.dev';
-      
-      console.log('Calling Python orchestration service for guest:', pythonServiceUrl);
-
-      // Prepare the payload for Python service with guest role
-      const payload = {
-        user_query: question,
-        role: "guest", // ✅ Send role as "guest"
-        id: guestKey,   // ✅ Use guestKey as ID
-        file: files ? files.map(f => ({
-          name: f.originalname,
-          size: f.size,
-          content: f.buffer?.toString('base64') || null
-        })) : []
-      };
-
-      // Make HTTP request to Python orchestration service
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-      
-      // Fix the fetch import to avoid type issues
-      const fetch = await import('node-fetch').then(mod => mod.default);
-      const response = await fetch(`${pythonServiceUrl}/process/json`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        console.error('Python orchestration service error:', response.status, response.statusText);
-        throw new Error(`Python service error: ${response.status} ${response.statusText}`);
-      }
-
-      const responseData = await response.json();
-      
-      // Extract the answer from the response
-      const answer = (responseData as any).answer || 
-                    (responseData as any).response || 
-                    (responseData as any).message || 
-                    "I apologize, but I couldn't process your request at the moment. As a guest user, some features may be limited.";
-      
-      console.log('Received response from Python orchestration service for guest');
-      return answer;
-
-    } catch (error: any) {
-      console.error('Error calling Python orchestration service for guest:', error);
-      
-      // Return different error messages based on error type
-      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-        return "I'm temporarily unavailable due to a service connection issue. Please try again in a moment.";
-      } else if (error.name === 'AbortError' || error.message?.includes('timeout')) {
-        return "I'm taking too long to respond. Please try with a simpler question or try again later.";
-      } else {
-        return "I encountered an error while processing your request. As a guest user, please try again or consider creating an account for more reliable service.";
-      }
-    }
-  }
-
-  // Get guest rate limits endpoint for frontend
   @Post('get-limits')
   async getGuestLimits(@Req() req: Request) {
     try {
       const limits = await this.guestRateLimitService.getGuestLimits();
       
-      // Get current usage for this guest
       const clientIp = this.getClientIp(req);
       const userAgent = req.headers['user-agent'] || '';
       const guestKey = this.guestRateLimitService.generateGuestKey(clientIp, userAgent);
       
-      // This will create/return usage for today
       const usageCheck = await this.guestRateLimitService.checkGuestRateLimit(guestKey, 0, 0, 0);
       
       return {

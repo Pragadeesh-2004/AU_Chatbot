@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Send, MessageCircle, Loader2, Menu, X, LogOut, Trash2, Copy, Check } from "lucide-react";
+import { Send, MessageCircle, Loader2, Menu, X, LogOut, Trash2, Copy, Check, Upload, X as XIcon } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -12,12 +12,13 @@ import {
   AlertDialogCancel,
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
-import { MarkdownRenderer } from "@/components/MarkdownRenderer";
+import MarkdownRenderer from "@/components/MarkdownRenderer";
 
 const STORAGE_KEY = "guestChatMessages";
 const GUEST_STATS_KEY = "guestStats";
 const GUEST_ID_KEY = "guestId";
 const GUEST_SESSION_KEY = "guestSessionId";
+const GUEST_COLLEGE_KEY = "guestCollege";
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000";
 
 function generateObjectId() {
@@ -26,13 +27,31 @@ function generateObjectId() {
   return timestamp + randomHex() + randomHex();
 }
 
+const stripMarkdown = (text: string): string => {
+  return text
+    .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+    .replace(/(\*\*|__)(.*?)\1/g, '$2')
+    .replace(/(\*|_)(.*?)\1/g, '$2')
+    .replace(/```[\s\S]*?```/g, (match) => {
+      return match.replace(/```/g, '').trim();
+    })
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#+\s+/gm, '')
+    .replace(/^>\s+/gm, '')
+    .replace(/^[-*_]{3,}$/gm, '')
+    .replace(/^[\s]*[-*+]\s+/gm, '')
+    .replace(/^[\s]*\d+\.\s+/gm, '')
+    .replace(/\n\n+/g, '\n')
+    .trim();
+};
+
 export default function GuestChatPage() {
   const [input, setInput] = useState("");
-  const [guestMessages, setGuestMessages] = useState<{ question: string; answer: string; timestamp: string }[]>([]);
+  const [guestMessages, setGuestMessages] = useState<{ question: string; answer: string; timestamp: string; files?: any[] }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState<string>("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [copiedItems, setCopiedItems] = useState<{ [key: string]: boolean }>({});
   const [guestRateLimits, setGuestRateLimits] = useState<any>(null);
   const [guestStats, setGuestStats] = useState({
@@ -42,14 +61,19 @@ export default function GuestChatPage() {
     filesUploaded: 0,
     lastReset: new Date().toDateString()
   });
+  const [collegeName, setCollegeName] = useState<string>("Anna University");
+  const [particles, setParticles] = useState<
+    { left: number; top: number; duration: number; delay: number }[]
+  >([]);
 
   const guestInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const blurRef = useRef<HTMLDivElement>(null);
 
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [alertDialogMessage, setAlertDialogMessage] = useState("");
 
-  // Persist guest id and session id
   const [guestId] = useState<string>(() => {
     if (typeof window === "undefined") return generateObjectId();
     const existing = window.localStorage.getItem(GUEST_ID_KEY);
@@ -68,9 +92,44 @@ export default function GuestChatPage() {
     return id;
   });
 
+  // ✅ Add animated background particles on mount
+  useEffect(() => {
+    setParticles(
+      Array.from({ length: 10 }).map(() => ({
+        left: Math.random() * 100,
+        top: Math.random() * 100,
+        duration: 3 + Math.random() * 4,
+        delay: Math.random() * 5,
+      }))
+    );
+  }, []);
+
+  // ✅ Track mouse movement for blur effect
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (blurRef.current) {
+        blurRef.current.style.left = `${(e.clientX / window.innerWidth) * 10}%`;
+        blurRef.current.style.top = `${(e.clientY / window.innerHeight) * 10}%`;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedCollege = window.localStorage.getItem(GUEST_COLLEGE_KEY);
+      if (savedCollege === "Anna_university") {
+        setCollegeName("Anna University");
+      }
+    }
+  }, []);
+
   const copyToClipboard = async (text: string, type: 'question' | 'answer', messageIndex: number) => {
     try {
-      await navigator.clipboard.writeText(text);
+      const plainText = type === 'answer' ? stripMarkdown(text) : text;
+      await navigator.clipboard.writeText(plainText);
       const key = `${messageIndex}-${type}`;
       setCopiedItems(prev => ({ ...prev, [key]: true }));
       setTimeout(() => setCopiedItems(prev => ({ ...prev, [key]: false })), 2000);
@@ -86,7 +145,8 @@ export default function GuestChatPage() {
       try {
         const response = await fetch(`${API_BASE}/guest-chatbot/get-limits`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include'
         });
 
         if (!response.ok) {
@@ -204,13 +264,43 @@ export default function GuestChatPage() {
     return true;
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.currentTarget.files;
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file.type !== 'application/pdf') {
+        setAlertDialogMessage('Only PDF files are allowed');
+        setAlertDialogOpen(true);
+        return;
+      }
+      const maxSize = 10 * 1024 * 1024;
+      if (file.size > maxSize) {
+        setAlertDialogMessage('File size must be less than 10MB');
+        setAlertDialogOpen(true);
+        return;
+      }
+      const fileLimitRemaining = (guestLimits.maxFileCount || 10) - guestStats.filesUploaded;
+      if (fileLimitRemaining <= 0) {
+        setAlertDialogMessage('File upload limit reached for today');
+        setAlertDialogOpen(true);
+        return;
+      }
+      setSelectedFiles([file]);
+    }
+  };
+
+  const removeFile = (idx: number) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== idx));
+  };
+
   const handleGuestSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!input.trim()) || isLoading) return;
+    if (!input.trim() || isLoading) return;
 
     const currentInput = input.trim();
     const inputTokens = calcTokens(currentInput);
     const estimatedOutputTokens = Math.max(50, Math.ceil(inputTokens * 2));
+    const fileCount = selectedFiles.length;
 
     if (!validateGuestLimits(inputTokens, estimatedOutputTokens)) return;
 
@@ -218,18 +308,34 @@ export default function GuestChatPage() {
     setInput("");
     setIsLoading(true);
 
+    const filesToDisplay = [...selectedFiles];
+
     try {
       let botResponse: string;
       let actualOutputTokens = estimatedOutputTokens;
 
+      const formData = new FormData();
+      formData.append('user_query', currentInput);
+      formData.append('collegeName', collegeName);
+
+      if (filesToDisplay && filesToDisplay.length > 0) {
+        for (const file of filesToDisplay) {
+          formData.append('file', file);
+        }
+      }
+
+      setSelectedFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
       try {
-        // ✅ Updated to use the new guest endpoint that connects to FastAPI
+        console.log('📤 Sending message with', filesToDisplay.length, 'file(s)...');
+        
         const res = await fetch(`${API_BASE}/guest-chatbot/send-message`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: currentInput
-          })
+          credentials: 'include',
+          body: formData
         });
 
         const text = await res.text().catch(() => "");
@@ -255,34 +361,51 @@ export default function GuestChatPage() {
           if (data.tokens_used) {
             actualOutputTokens = data.tokens_used.output || estimatedOutputTokens;
           }
+
+          if (data.usage?.remainingLimits) {
+            setGuestStats(prev => ({
+              requestsUsed: prev.requestsUsed + 1,
+              inputTokensUsed: prev.inputTokensUsed + inputTokens,
+              outputTokensUsed: prev.outputTokensUsed + actualOutputTokens,
+              filesUploaded: prev.filesUploaded + fileCount,
+              lastReset: prev.lastReset
+            }));
+          }
         }
       } catch (fetchErr) {
         console.warn('Network error, falling back to local simulation:', fetchErr);
         botResponse = await simulateBotResponse(currentInput);
       }
 
-      setGuestStats(prev => ({
-        ...prev,
-        requestsUsed: prev.requestsUsed + 1,
-        inputTokensUsed: prev.inputTokensUsed + inputTokens,
-        outputTokensUsed: prev.outputTokensUsed + actualOutputTokens,
-        lastReset: prev.lastReset
-      }));
+      const filesData = filesToDisplay && filesToDisplay.length > 0 
+        ? filesToDisplay.map(f => ({ 
+            name: f.name, 
+            size: f.size, 
+            type: f.type 
+          })) 
+        : undefined;
 
       const newMessage = {
         question: currentInput,
         answer: botResponse,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        files: filesData
       };
 
       setGuestMessages(msgs => [...msgs, newMessage]);
       setCurrentQuestion("");
+      
     } catch (err: any) {
       console.error("Unexpected error in guest send:", err);
       setAlertDialogMessage("An unexpected error occurred. Please try again.");
       setAlertDialogOpen(true);
       setInput(currentInput);
       setCurrentQuestion("");
+      
+      setSelectedFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     } finally {
       setIsLoading(false);
     }
@@ -300,6 +423,8 @@ export default function GuestChatPage() {
     localStorage.removeItem(GUEST_STATS_KEY);
     localStorage.removeItem(GUEST_ID_KEY);
     localStorage.removeItem(GUEST_SESSION_KEY);
+    localStorage.removeItem(GUEST_COLLEGE_KEY);
+    localStorage.removeItem("forceGuestMode");
     window.location.href = "/modules/authentication";
   };
 
@@ -311,174 +436,285 @@ export default function GuestChatPage() {
   });
 
   const remainingLimits = getRemainingLimits();
-
-  const renderRateLimitInfo = () => {
-    const requestPercent = (guestStats.requestsUsed / guestLimits.maxRequests) * 100;
-    const inputTokenPercent = (guestStats.inputTokensUsed / guestLimits.maxInputTokens) * 100;
-    const outputTokenPercent = (guestStats.outputTokensUsed / guestLimits.maxOutputTokens) * 100;
-
-    return (
-      <div className="px-4 py-3 border-b border-blue-900">
-        <div className="text-xs text-cyan-400 mb-2">Daily Limits (Guest)</div>
-        <div className="space-y-2">
-          <div>
-            <div className="text-xs text-cyan-300">Requests: {guestStats.requestsUsed}/{guestLimits.maxRequests}</div>
-            <div className="w-full bg-blue-800 rounded-full h-1.5">
-              <div className="bg-cyan-500 h-1.5 rounded-full transition-all" style={{ width: `${Math.min(requestPercent, 100)}%` }} />
-            </div>
-          </div>
-          <div>
-            <div className="text-xs text-cyan-300">Input: {guestStats.inputTokensUsed}/{guestLimits.maxInputTokens}</div>
-            <div className="w-full bg-blue-800 rounded-full h-1.5">
-              <div className="bg-cyan-500 h-1.5 rounded-full transition-all" style={{ width: `${Math.min(inputTokenPercent, 100)}%` }} />
-            </div>
-          </div>
-          <div>
-            <div className="text-xs text-cyan-300">Output: {guestStats.outputTokensUsed}/{guestLimits.maxOutputTokens}</div>
-            <div className="w-full bg-blue-800 rounded-full h-1.5">
-              <div className="bg-cyan-500 h-1.5 rounded-full transition-all" style={{ width: `${Math.min(outputTokenPercent, 100)}%` }} />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const sendDisabled = (!input.trim()) || isLoading || remainingLimits.requests <= 0;
+  const sendDisabled = !input.trim() || isLoading || remainingLimits.requests <= 0;
 
   return (
-    <div className="h-screen w-full flex bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800 relative overflow-hidden guest-chatbot-container">
-      <div className={`fixed top-0 left-0 h-full flex flex-col bg-blue-950/90 border-r border-blue-900 transition-all duration-300 z-30 ${sidebarOpen ? "w-72" : "w-16"}`}>
-        <div className="flex items-center justify-between px-4 py-4">
-          <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} className="text-cyan-400 hover:text-white hover:bg-cyan-700 transition-all duration-200" aria-label="Toggle Sidebar">
-            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
-          </Button>
+    <>
+      <style jsx global>{`
+        @keyframes float {
+          0%, 100% { 
+            transform: translateY(0px) rotate(0deg); 
+            opacity: 0.8;
+          }
+          50% { 
+            transform: translateY(-15px) rotate(180deg); 
+            opacity: 1;
+          }
+        }
+        .animate-float {
+          animation: float 6s ease-in-out infinite;
+        }
+      `}</style>
+
+      <div className="h-screen w-full flex bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800 relative overflow-hidden guest-chatbot-container">
+        {/* ✅ Animated Background Elements */}
+        <div className="absolute inset-0 pointer-events-none">
+          {particles.map((p, i) => (
+            <div
+              key={`particle-${i}`}
+              className="absolute w-1 h-1 bg-white/20 rounded-full"
+              style={{
+                left: `${p.left}%`,
+                top: `${p.top}%`,
+                animation: `float ${p.duration}s ease-in-out infinite`,
+                animationDelay: `${p.delay}s`
+              }}
+            />
+          ))}
+          <div 
+            ref={blurRef}
+            className="absolute w-72 h-72 bg-gradient-to-br from-cyan-300/20 via-blue-400/15 to-blue-700/20 rounded-full blur-3xl transition-all duration-1000"
+            style={{
+              left: `5%`,
+              top: `5%`,
+            }}
+          />
         </div>
 
-        <div className="px-4 py-4 border-b border-blue-900">
-          {sidebarOpen ? (
-            <div className="flex items-center gap-3">
-              <div className="bg-cyan-700 text-white rounded-full w-12 h-12 flex items-center justify-center text-2xl font-bold">G</div>
-              <div>
-                <div className="font-semibold text-cyan-100 text-lg">Guest User</div>
-                <div className="text-xs text-cyan-400">Limited Access</div>
-              </div>
-            </div>
-          ) : (
-            <div className="flex justify-center">
-              <div className="bg-cyan-700 text-white rounded-full w-10 h-10 flex items-center justify-center text-lg font-bold">G</div>
-            </div>
-          )}
-        </div>
+        {/* Sidebar */}
+        <div className={`fixed top-0 left-0 h-full flex flex-col bg-blue-950/90 border-r border-blue-900 transition-all duration-300 z-30 ${sidebarOpen ? "w-72" : "w-16"}`}>
+          <div className="flex items-center justify-between px-4 py-4">
+            <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} className="text-cyan-400 hover:text-white hover:bg-cyan-700 transition-all duration-200" aria-label="Toggle Sidebar">
+              {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+            </Button>
+          </div>
 
-        {sidebarOpen && renderRateLimitInfo()}
-
-        <div className="flex-1 flex flex-col justify-between">
-          <div className="px-2 py-4">
+          {/* User Info */}
+          <div className="px-4 py-4 border-b border-blue-900">
             {sidebarOpen ? (
-              <div className="space-y-2">
-                <Button variant="ghost" onClick={clearChatHistory} disabled={guestMessages.length === 0} className="w-full text-red-400 hover:bg-blue-900 hover:text-red-300 flex items-center gap-2 justify-start disabled:opacity-50">
-                  <Trash2 size={18} /> Clear Chat History
-                </Button>
+              <div className="flex items-center gap-3">
+                <div className="bg-cyan-700 text-white rounded-full w-12 h-12 flex items-center justify-center text-2xl font-bold">G</div>
+                <div>
+                  <div className="font-semibold text-cyan-100 text-lg">Guest User</div>
+                  <div className="text-xs text-cyan-400">{collegeName}</div>
+                </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={clearChatHistory} disabled={guestMessages.length === 0} className="text-red-400 hover:text-white hover:bg-red-600 transition-all duration-200 disabled:opacity-50" aria-label="Clear Chat History">
-                  <Trash2 size={20} />
-                </Button>
+              <div className="flex justify-center">
+                <div className="bg-cyan-700 text-white rounded-full w-10 h-10 flex items-center justify-center text-lg font-bold">G</div>
               </div>
             )}
           </div>
 
-          <div className="px-2 py-4 border-t border-blue-900">
-            {sidebarOpen ? (
-              <Button variant="ghost" onClick={handleLogout} className="w-full text-cyan-200 hover:bg-blue-900 flex items-center gap-2 justify-start"><LogOut size={18} /> Back to Login</Button>
-            ) : (
-              <Button variant="ghost" size="icon" onClick={handleLogout} className="text-cyan-400 hover:text-white hover:bg-cyan-700 transition-all duration-200" aria-label="Back to Login"><LogOut size={20} /></Button>
-            )}
+          <div className="flex-1 flex flex-col justify-between">
+            <div className="px-2 py-4">
+              {sidebarOpen ? (
+                <div className="space-y-2">
+                  <Button variant="ghost" onClick={clearChatHistory} disabled={guestMessages.length === 0} className="w-full text-red-400 hover:bg-blue-900 hover:text-red-300 flex items-center gap-2 justify-start disabled:opacity-50">
+                    <Trash2 size={18} /> Clear Chat History
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-2">
+                  <Button variant="ghost" size="icon" onClick={clearChatHistory} disabled={guestMessages.length === 0} className="text-red-400 hover:text-white hover:bg-red-600 transition-all duration-200 disabled:opacity-50" aria-label="Clear Chat History">
+                    <Trash2 size={20} />
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="px-2 py-4 border-t border-blue-900">
+              {sidebarOpen ? (
+                <Button variant="ghost" onClick={handleLogout} className="w-full text-cyan-200 hover:bg-blue-900 flex items-center gap-2 justify-start"><LogOut size={18} /> Back to Login</Button>
+              ) : (
+                <Button variant="ghost" size="icon" onClick={handleLogout} className="text-cyan-400 hover:text-white hover:bg-cyan-700 transition-all duration-200" aria-label="Back to Login"><LogOut size={20} /></Button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className={`flex-1 flex flex-col ${sidebarOpen ? "ml-72" : "ml-16"} transition-all duration-300`}>
-        <div className="flex-1 overflow-y-auto px-0 py-6 z-10 guest-messages-scroll">
-          <div className="max-w-2xl w-full mx-auto flex flex-col gap-2 px-4 min-h-full">
-            {guestMessages.length === 0 && !isLoading ? (
-              <div className="flex flex-col items-center justify-center flex-1 py-16">
-                <MessageCircle className="text-cyan-400 mb-4" size={32} />
-                <h2 className="text-xl lg:text-2xl font-bold text-cyan-100 mb-2 text-center">Hello Guest! 👋</h2>
-                <p className="text-base lg:text-lg text-cyan-200 text-center max-w-md mb-6">I'm your AU assistant in guest mode. Ask me anything - but note you have limited daily usage!</p>
-                <div className="text-sm text-cyan-300 text-center bg-blue-900/40 px-4 py-2 rounded-lg">💡 Daily limits: {guestLimits.maxRequests} requests, {guestLimits.maxInputTokens} input tokens, {guestLimits.maxOutputTokens} output tokens</div>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2 mt-auto">
-                {guestMessages.map((msg, idx) => (
-                  <div key={idx}>
-                    {/* Question - keep as is */}
+        {/* Main Chat Area */}
+        <div className={`flex-1 flex flex-col ${sidebarOpen ? "ml-72" : "ml-16"} transition-all duration-300 relative z-20`}>
+          <div className="flex-1 overflow-y-auto px-0 py-6 z-10 guest-messages-scroll">
+            <div className="max-w-2xl w-full mx-auto flex flex-col gap-2 px-4 min-h-full">
+              {guestMessages.length === 0 && !isLoading ? (
+                <div className="flex flex-col items-center justify-center flex-1 py-16">
+                  <MessageCircle className="text-cyan-400 mb-4" size={32} />
+                  <h2 className="text-xl lg:text-2xl font-bold text-cyan-100 mb-2 text-center">Hello Guest! 👋</h2>
+                  <p className="text-base lg:text-lg text-cyan-200 text-center max-w-md mb-4">I'm your {collegeName} assistant in guest mode. Ask me anything - but note you have limited daily usage!</p>
+                  <div className="text-sm text-cyan-300 text-center bg-blue-900/40 px-4 py-2 rounded-lg">💡 Daily limits: {guestLimits.maxRequests} requests, {guestLimits.maxInputTokens} input tokens, {guestLimits.maxOutputTokens} output tokens</div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 mt-auto">
+                  {guestMessages.map((msg, idx) => (
+                    <div key={`${idx}-msg`}>
+                      {/* Question */}
+                      <div className="flex justify-end mb-2">
+                        <div className="max-w-[90%] flex flex-col items-end gap-1">
+                          {msg.files && msg.files.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-1">
+                              {msg.files.map((file: any, fileIdx: number) => (
+                                <div 
+                                  key={fileIdx}
+                                  className="flex items-center gap-1 bg-cyan-800 text-white px-2 py-1 rounded-lg text-xs"
+                                >
+                                  <span>📄</span>
+                                  <span className="max-w-[150px] truncate">{file.name || 'Document.pdf'}</span>
+                                  <span className="text-cyan-300 text-[10px]">
+                                    ({file.size ? `${(file.size / 1024).toFixed(1)} KB` : 'PDF'})
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          
+                          <div className="bg-cyan-700 text-white px-4 py-3 rounded-2xl relative group">
+                            <div className="text-base">{msg.question}</div>
+                            <Button variant="ghost" size="icon" 
+                              className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-200 hover:text-white hover:bg-cyan-800" 
+                              onClick={() => copyToClipboard(msg.question, 'question', idx)} 
+                              aria-label="Copy question">
+                              {copiedItems[`${idx}-question`] ? <Check size={14} /> : <Copy size={14} />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Answer */}
+                      <div className="flex justify-start mb-4">
+                        <div className="max-w-[85%] bg-blue-900/80 text-cyan-100 px-4 py-3 rounded-2xl relative group">
+                          <MarkdownRenderer content={msg.answer} />
+                          <Button variant="ghost" size="icon" 
+                            className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-300 hover:text-white hover:bg-blue-800" 
+                            onClick={() => copyToClipboard(msg.answer, 'answer', idx)} 
+                            aria-label="Copy answer">
+                            {copiedItems[`${idx}-answer`] ? <Check size={14} /> : <Copy size={14} />}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {currentQuestion && (
                     <div className="flex justify-end mb-2">
-                      <div className="max-w-[90%] bg-cyan-700 text-white px-4 py-3 rounded-2xl relative group">
-                        <div className="text-base">{msg.question}</div>
-                        <Button variant="ghost" size="icon" 
-                          className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-200 hover:text-white hover:bg-cyan-800" 
-                          onClick={() => copyToClipboard(msg.question, 'question', idx)} 
-                          aria-label="Copy question">
-                          {copiedItems[`${idx}-question`] ? <Check size={14} /> : <Copy size={14} />}
-                        </Button>
+                      <div className="max-w-[90%] flex flex-col items-end gap-1">
+                        {selectedFiles.length > 0 && (
+                          <div className="flex flex-wrap gap-2 mb-1">
+                            {selectedFiles.map((file, fileIdx) => (
+                              <div 
+                                key={fileIdx}
+                                className="flex items-center gap-1 bg-cyan-800 text-white px-2 py-1 rounded-lg text-xs"
+                              >
+                                <span>📄</span>
+                                <span className="max-w-[150px] truncate">{file.name}</span>
+                                <span className="text-cyan-300 text-[10px]">
+                                  ({(file.size / 1024).toFixed(1)} KB)
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        <div className="bg-cyan-700 text-white px-4 py-3 rounded-2xl">
+                          <div className="text-base">{currentQuestion}</div>
+                        </div>
                       </div>
                     </div>
+                  )}
 
-                    {/* Answer - WITH MARKDOWN */}
+                  {isLoading && (
                     <div className="flex justify-start mb-4">
-                      <div className="max-w-[85%] bg-blue-900/80 text-cyan-100 px-4 py-3 rounded-2xl relative group">
-                        <MarkdownRenderer content={msg.answer} />
-                        <Button variant="ghost" size="icon" 
-                          className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-cyan-300 hover:text-white hover:bg-blue-800" 
-                          onClick={() => copyToClipboard(msg.answer, 'answer', idx)} 
-                          aria-label="Copy answer">
-                          {copiedItems[`${idx}-answer`] ? <Check size={14} /> : <Copy size={14} />}
-                        </Button>
+                      <div className="max-w-[85%] bg-blue-900/80 text-cyan-100 px-4 py-3 rounded-2xl flex items-center gap-2">
+                        <Loader2 size={16} className="animate-spin" />
+                        <div className="text-base">Thinking...</div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )}
+                </div>
+              )}
 
-                {currentQuestion && (
-                  <div className="flex justify-end mb-2">
-                    <div className="max-w-[90%] bg-cyan-700 text-white px-4 py-3 rounded-2xl">
-                      <div className="text-base">{currentQuestion}</div>
-                    </div>
-                  </div>
-                )}
-
-                {isLoading && (
-                  <div className="flex justify-start mb-4">
-                    <div className="max-w-[85%] bg-blue-900/80 text-cyan-100 px-4 py-3 rounded-2xl flex items-center gap-2">
-                      <Loader2 size={16} className="animate-spin" />
-                      <div className="text-base">Thinking...</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div ref={messagesEndRef} />
-          </div>
-        </div>
-
-        <div className="p-4 lg:p-6 bg-transparent border-t border-blue-900 flex-shrink-0 z-10">
-          <form className="max-w-2xl mx-auto w-full" onSubmit={handleGuestSend}>
-            <div className="flex flex-col gap-2">
-              <div className="relative flex items-center">
-                <Input ref={guestInputRef} type="text" value={input} onChange={e => setInput(e.target.value)} placeholder="Type your message... (Guest Mode)" className="w-full bg-blue-900/80 text-white placeholder-white border border-black h-12 px-4 pr-20 text-base rounded-2xl focus:outline-none focus:ring-2 focus:ring-cyan-700/30" autoComplete="off" disabled={isLoading} />
-                <Button type="submit" size="sm" className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-cyan-700 text-white hover:bg-cyan-800 h-10 w-10 rounded-xl p-0 flex items-center justify-center disabled:opacity-50" disabled={sendDisabled} aria-label="Send">
-                  {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
-                </Button>
-              </div>
+              <div ref={messagesEndRef} />
             </div>
-          </form>
+          </div>
+
+          {/* Input Area */}
+          <div className="p-4 lg:p-6 bg-transparent border-t border-blue-900 flex-shrink-0 z-10">
+            <form className="max-w-2xl mx-auto w-full" onSubmit={handleGuestSend}>
+              <div className="flex flex-col gap-2">
+                <div className="relative flex items-center">
+                  <Button 
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute left-2 text-cyan-400 hover:text-cyan-300"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Upload PDF"
+                    aria-label="Upload PDF"
+                  >
+                    <Upload size={20} />
+                  </Button>
+                  <Input 
+                    ref={guestInputRef} 
+                    type="text" 
+                    value={input} 
+                    onChange={e => setInput(e.target.value)} 
+                    placeholder={selectedFiles.length > 0 ? "Add a message about this PDF..." : "Type your message... (Guest Mode)"} 
+                    className="w-full bg-blue-900/80 text-white placeholder-white border border-black h-12 px-12 pr-20 text-base rounded-2xl focus:outline-none focus:ring-2 focus:ring-cyan-700/30" 
+                    autoComplete="off" 
+                    disabled={isLoading} 
+                  />
+                  <Button 
+                    type="submit" 
+                    size="sm" 
+                    className="absolute right-2 top-1/2 transform -translate-y-1/2 bg-cyan-700 text-white hover:bg-cyan-800 h-10 w-10 rounded-xl p-0 flex items-center justify-center disabled:opacity-50" 
+                    disabled={sendDisabled} 
+                    aria-label="Send">
+                    {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+                  </Button>
+                </div>
+                
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,application/pdf"
+                  style={{ display: "none" }}
+                  onChange={handleFileChange}
+                />
+
+                {selectedFiles.length > 0 && (
+                  <div className="mt-2 flex gap-2 flex-wrap text-cyan-200 text-sm">
+                    {selectedFiles.map((file, idx) => (
+                      <div 
+                        key={file.name + idx} 
+                        className="flex items-center bg-blue-900/90 border border-blue-800 px-3 py-2 rounded-lg group hover:bg-blue-800 transition-colors duration-200"
+                      >
+                        <span className="text-lg mr-2">📄</span>
+                        <div className="flex flex-col mr-3">
+                          <span className="text-cyan-100 font-medium text-sm">{file.name}</span>
+                          <span className="text-cyan-400 text-xs">
+                            {(file.size / 1024).toFixed(1)} KB • PDF
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="ml-auto text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded p-1 transition-colors duration-200"
+                          onClick={() => removeFile(idx)}
+                          aria-label="Remove PDF"
+                          title="Remove PDF"
+                        >
+                          <XIcon size={18} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </form>
+          </div>
         </div>
       </div>
 
+      {/* Alert Dialog */}
       <AlertDialog open={alertDialogOpen} onOpenChange={setAlertDialogOpen}>
         <AlertDialogContent className="bg-gradient-to-br from-blue-950 to-blue-900 border border-blue-800 text-cyan-100 shadow-2xl max-w-md mx-4 z-[9999]">
           <AlertDialogHeader>
@@ -500,6 +736,6 @@ export default function GuestChatPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   );
 }

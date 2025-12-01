@@ -1,14 +1,11 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
 import { GuestRateLimitService } from './guest-rate-limit.service';
 import { GuestChatbotController } from './guest-chatbot.controller';
-import { ChatbotModule } from '../chatbot/chatbot.module';
+import { MongooseModule } from '@nestjs/mongoose';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
-  imports: [
-    ChatbotModule,
-    ConfigModule // Add ConfigModule
-  ],
+  imports: [MongooseModule.forFeature([]), ConfigModule],
   providers: [GuestRateLimitService],
   controllers: [GuestChatbotController],
   exports: [GuestRateLimitService]

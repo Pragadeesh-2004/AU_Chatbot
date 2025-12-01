@@ -10,7 +10,11 @@ import { DeleteUserDto } from "./dto/delete-user.dto";
 import { AdminService } from '../admin/admin.service';
 // ✅ Add these imports for HTTP requests
 import { ConfigService } from '@nestjs/config';
-import fetch from 'node-fetch'; // You might need to install: npm install node-fetch @types/node-fetch
+import FormData from 'form-data'; // ✅ Add this import at the top with other imports
+import fetch from 'node-fetch';
+import { Readable } from 'stream';
+
+// ... existing code ...
 
 const ROLE_CONFIG = {
   student: {
@@ -50,65 +54,155 @@ export class ChatbotService {
   }
 
   // ✅ Make this method public so GuestChatbotController can use it
-  async callPythonOrchestration(role: string, id: string, question: string, files?: any[]): Promise<string> {
+ // Update the callPythonOrchestration method to remove timeout property
+
+// Update callPythonOrchestration method with proper FormData instantiation
+
+async callPythonOrchestration(
+  role: string,
+  id: string,
+  question: string,
+  files?: any[],
+  collegeName?: string
+): Promise<string> {
+  try {
+    const pythonServiceUrl = this.configService.get<string>('PYTHON_ORCHESTRATION_URL') || 
+                            process.env.PYTHON_ORCHESTRATION_URL ||
+                            'http://localhost:5000';
+    
+    const baseUrl = pythonServiceUrl.replace(/\/$/, '');
+    
+    console.log('Calling Python orchestration service:', baseUrl);
+    console.log('Payload:', { user_query: question, role, id, collegeName, filesCount: files?.length || 0 });
+
+    // ✅ Create FormData instance - use require if import fails
+    let formData: any;
     try {
-      // Get Python orchestration URL from environment variables
-      const pythonServiceUrl = this.configService.get<string>('PYTHON_ORCHESTRATION_URL') || 
-                              'https://your-python-codespace-url.app.github.dev'; // Replace with actual URL
-      
-      console.log('Calling Python orchestration service:', pythonServiceUrl);
+      // Try using imported FormData
+      formData = new FormData();
+    } catch (e) {
+      // Fallback to require
+      const FormDataClass = require('form-data');
+      formData = new FormDataClass();
+    }
 
-      // Prepare the payload for Python service
-      const payload = {
-        user_query: question,
-        role,
-        id,
-        file: files || []
-      };
+    // ✅ Add text fields to FormData
+    formData.append('user_query', question);
+    formData.append('role', role);
+    formData.append('id', id);
+    formData.append('collegeName', collegeName || 'Anna_university');
 
-      // Make HTTP request to Python orchestration service
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
-      
-      const fetch = (await import('node-fetch')).default;
-      const response = await fetch(`${pythonServiceUrl}/process/json`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        console.error('Python orchestration service error:', response.status, response.statusText);
-        throw new Error(`Python service error: ${response.status} ${response.statusText}`);
-      }
-
-      const responseData = await response.json() as any;
-      
-      // Extract the answer from the response
-      const answer = responseData.answer || responseData.response || responseData.message || "I apologize, but I couldn't process your request at the moment.";
-      
-      console.log('Received response from Python orchestration service');
-      return answer;
-
-    } catch (error) {
-      console.error('Error calling Python orchestration service:', error);
-      
-      // Return different error messages based on error type
-      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
-        return "I'm temporarily unavailable due to a service connection issue. Please try again in a moment.";
-      } else if (error.name === 'AbortError' || error.message.includes('timeout')) {
-        return "I'm taking too long to respond. Please try with a simpler question or try again later.";
-      } else {
-        return "I encountered an error while processing your request. Please try again or rephrase your question.";
+    // ✅ Add files as binary FormData (not base64)
+    if (files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        
+        // If file has buffer (from FormData upload), append buffer directly
+        if (file.buffer) {
+          // Convert buffer to stream for form-data
+          const stream = Readable.from(file.buffer);
+          formData.append('file', stream, {
+            filename: file.name || `file_${i}.pdf`,
+            contentType: file.type || 'application/pdf'
+          });
+        } else if (file.data && typeof file.data === 'string') {
+          // If file has base64 data, convert back to buffer
+          const buffer = Buffer.from(file.data, 'base64');
+          const stream = Readable.from(buffer);
+          formData.append('file', stream, {
+            filename: file.name || `file_${i}.pdf`,
+            contentType: file.type || 'application/pdf'
+          });
+        }
       }
     }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    const endpoints = [
+      
+      `${baseUrl}/process`,
+      ];
+
+    let lastError: any;
+
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`Trying endpoint: ${endpoint}`);
+        
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: formData.getHeaders(),
+          body: formData,
+          signal: controller.signal
+        });
+
+        console.log(`Response from ${endpoint}:`, response.status, response.statusText);
+
+        if (response.ok) {
+          clearTimeout(timeoutId);
+          const responseData = await response.json() as any;
+          
+          const answer = responseData.answer || 
+                        responseData.response || 
+                        responseData.message || 
+                        responseData.result ||
+                        "I apologize, but I couldn't process your request at the moment.";
+          
+          console.log('✅ Successfully received response from Python orchestration service');
+          return answer;
+        } else {
+          lastError = new Error(`${endpoint} returned ${response.status}: ${response.statusText}`);
+          console.warn(`❌ ${endpoint} failed:`, response.status, response.statusText);
+          
+          try {
+            const errorBody = await response.text();
+            console.warn('Error body:', errorBody.substring(0, 200));
+          } catch (e) {
+            console.warn('Could not read error body');
+          }
+          
+          continue;
+        }
+      } catch (endpointError) {
+        lastError = endpointError;
+        console.warn(`❌ Failed to connect to ${endpoint}:`, (endpointError as any).message);
+        continue;
+      }
+    }
+
+    clearTimeout(timeoutId);
+    
+    if (lastError) {
+      throw lastError;
+    }
+
+    throw new Error('No valid endpoint found for Python orchestration service');
+
+  } catch (error) {
+    console.error('❌ Error calling Python orchestration service:', error);
+    
+    const errorMessage = (error as any).message || String(error);
+    
+    if (errorMessage.includes('ECONNREFUSED')) {
+      console.error('Connection refused - Python service may not be running');
+      return "The AI service is currently offline. Please check if the Python orchestration service is running.";
+    } else if (errorMessage.includes('ENOTFOUND') || errorMessage.includes('getaddrinfo')) {
+      console.error('DNS resolution failed - Invalid service URL');
+      return "The service URL is invalid or unreachable. Please check your configuration.";
+    } else if (errorMessage.includes('timeout') || errorMessage.includes('AbortError')) {
+      console.error('Request timeout - Python service taking too long');
+      return "The AI service is taking too long to respond. Please try again with a simpler question.";
+    } else if (errorMessage.includes('502') || errorMessage.includes('Bad Gateway')) {
+      console.error('502 Bad Gateway - Python service proxy issue');
+      return "The service gateway returned an error. The Python service may be misconfigured or unavailable.";
+    } else {
+      console.error('Generic error:', errorMessage);
+      return `An error occurred: ${errorMessage}. Please try again later.`;
+    }
   }
+}
 
   async addUser(dto: CreateUserDto) {
     try {
@@ -238,7 +332,7 @@ export class ChatbotService {
     const config = ROLE_CONFIG[dto.role];
     const docId = new Types.ObjectId(config.doc);
 
-    // compute tokens for the question (we'll recalculate output tokens after getting response)
+    // compute tokens for the question
     const inputTokens = this.calcTokensFromText(dto.question);
 
     // ===== robust user balance lookup =====
@@ -272,7 +366,7 @@ export class ChatbotService {
       };
     }
 
-    // Check request limits first (1 request = 1 chat message sent)
+    // Check request limits first
     const availableRequests = Number(rlUser.balance_request_per_day ?? 0);
     if (availableRequests < 1) {
       return {
@@ -283,11 +377,10 @@ export class ChatbotService {
       };
     }
 
-    // Check file limits - ACTIVE VALIDATION
+    // Check file limits
     const availableFileCount = Number(rlUser.balance_file_count ?? 0);
-    const maxFileSize = Number(rlDoc?.file_size ?? 5); // MB
+    const maxFileSize = Number(rlDoc?.file_size ?? 5);
 
-    // When files are uploaded, validate them
     if (dto.files && dto.files.length > 0) {
       if (dto.files.length > availableFileCount) {
         return {
@@ -314,7 +407,6 @@ export class ChatbotService {
     const availableInput = Number(rlUser.balance_input_token_per_day ?? 0);
     const availableOutput = Number(rlUser.balance_output_token_per_day ?? 0);
 
-    // Check input tokens
     if (availableInput < inputTokens) {
       return {
         error: `Input token exhausted. Your input requires ${inputTokens} tokens but you have ${availableInput}. Balances reset daily at 12:00 AM.`,
@@ -324,19 +416,24 @@ export class ChatbotService {
       };
     }
 
-    // ✅ Call Python orchestration service to get real response
+    // ✅ Call Python orchestration service with properly formatted files and collegeName
     let actualAnswer: string;
     try {
-      actualAnswer = await this.callPythonOrchestration(dto.role, dto.id, dto.question, dto.files);
+      actualAnswer = await this.callPythonOrchestration(
+        dto.role,
+        dto.id,
+        dto.question,
+        dto.files, // ✅ Pass files as-is (already formatted in payload)
+        dto.collegeName // ✅ Pass college name
+      );
     } catch (error) {
       console.error('Failed to get response from Python orchestration:', error);
       actualAnswer = "I'm experiencing technical difficulties. Please try again later.";
     }
 
-    // ✅ Calculate actual output tokens based on the real response
+    // Calculate actual output tokens
     const actualOutputTokens = this.calcTokensFromText(actualAnswer);
 
-    // Check if we have enough output tokens for the actual response
     if (availableOutput < actualOutputTokens) {
       return {
         error: `Output token exhausted. Response requires ${actualOutputTokens} tokens but you have ${availableOutput}. Balances reset daily at 12:00 AM.`,
@@ -346,16 +443,30 @@ export class ChatbotService {
       };
     }
 
-    // push QA into session with the REAL answer (try matching session first)
+    // ✅ Store files in QA record with base64 data for reference
+    const qaRecord: any = {
+      question: dto.question,
+      answer: actualAnswer,
+      timestamp: dto.timestamp
+    };
+
+    // Add files to QA record if present
+    if (dto.files && dto.files.length > 0) {
+      qaRecord.files = dto.files.map(file => ({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        // ✅ Store base64 content if present
+        ...(file.data ? { data: file.data } : {})
+      }));
+    }
+
+    // push QA into session
     const result = await this.universityConnection.collection("memory").updateOne(
       { _id: docId },
       {
         $push: {
-          [`${config.array}.$[stud].sessions.$[sess].qa`]: {
-            question: dto.question,
-            answer: actualAnswer, // ✅ Use real answer from Python orchestration
-            timestamp: dto.timestamp
-          }
+          [`${config.array}.$[stud].sessions.$[sess].qa`]: qaRecord
         } as any
       },
       {
@@ -366,7 +477,6 @@ export class ChatbotService {
       }
     );
 
-    // if session wasn't found/updated, create session and add qa
     if ((result.modifiedCount ?? 0) === 0) {
       await this.universityConnection.collection("memory").updateOne(
         { _id: docId, [`${config.array}.${config.idField}`]: dto.id },
@@ -375,23 +485,17 @@ export class ChatbotService {
             [`${config.array}.$.sessions`]: {
               session_id: dto.session_id,
               session_name: (dto as any).session_name ?? `Session ${dto.session_id}`,
-              qa: [{ 
-                question: dto.question, 
-                answer: actualAnswer, // ✅ Use real answer from Python orchestration
-                timestamp: dto.timestamp 
-              }]
+              qa: [qaRecord]
             }
           } as any
         }
       );
     }
 
-    // deduct actual tokens AND request count AND file count via admin service
+    // Deduct tokens and requests
     try {
-      await this.adminService.adjustUserTokens(dto.role, dto.id, inputTokens, actualOutputTokens); // ✅ Use actual output tokens
-      // Deduct 1 request for this chat message
+      await this.adminService.adjustUserTokens(dto.role, dto.id, inputTokens, actualOutputTokens);
       await this.adminService.adjustUserRequests(dto.role, dto.id, 1);
-      // Deduct file count if files were uploaded
       if (dto.files && dto.files.length > 0) {
         await this.adminService.adjustUserFileCount(dto.role, dto.id, dto.files.length);
       }
@@ -509,5 +613,108 @@ export class ChatbotService {
 
     return user || null;
   }
+
+  // Add this new method to ChatbotService class
+
+  // Update processUploadedFile method
+
+// Update processUploadedFile method
+
+// Update processUploadedFile method with proper FormData instantiation
+
+async processUploadedFile(
+  userId: string,
+  userRole: string,
+  qaId: string,
+  fileBuffer: Buffer,
+  fileName: string,
+  fileSize: number
+): Promise<void> {
+  try {
+    console.log(`Processing uploaded file: ${fileName} (${fileSize} bytes)`);
+
+    const pythonServiceUrl = this.configService.get<string>('PYTHON_ORCHESTRATION_URL') || 
+                            process.env.PYTHON_ORCHESTRATION_URL ||
+                            'http://localhost:5000';
+
+    const baseUrl = pythonServiceUrl.replace(/\/$/, '');
+
+    // ✅ Create FormData instance with fallback
+    let formData: any;
+    try {
+      formData = new FormData();
+    } catch (e) {
+      const FormDataClass = require('form-data');
+      formData = new FormDataClass();
+    }
+
+    formData.append('qa_id', qaId);
+    formData.append('user_id', userId);
+    formData.append('role', userRole);
+
+    const stream = Readable.from(fileBuffer);
+    formData.append('file', stream, {
+      filename: fileName,
+      contentType: 'application/pdf'
+    });
+
+    console.log('Sending file to Python orchestration service:', {
+      qa_id: qaId,
+      user_id: userId,
+      role: userRole,
+      file: {
+        name: fileName,
+        size: fileSize,
+        type: 'application/pdf'
+      }
+    });
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+    const endpoints = [
+      `${baseUrl}/process/upload`,
+      `${baseUrl}/upload`,
+      `${baseUrl}/api/upload`
+    ];
+
+    let lastError: any;
+
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`Trying endpoint: ${endpoint}`);
+        
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: formData.getHeaders(),
+          body: formData,
+          signal: controller.signal
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const responseData = await response.json();
+          console.log('✅ File processing response:', responseData);
+          return;
+        } else {
+          lastError = new Error(`${endpoint} returned ${response.status}`);
+          console.warn(`❌ ${endpoint} failed: ${response.status}`);
+          continue;
+        }
+      } catch (endpointError) {
+        lastError = endpointError;
+        console.warn(`❌ Failed to connect to ${endpoint}:`, (endpointError as any).message);
+        continue;
+      }
+    }
+
+    clearTimeout(timeoutId);
+    console.warn('File processing failed, but message already saved:', lastError);
+
+  } catch (error) {
+    console.error('Error processing uploaded file:', error);
+  }
+}
 }
 

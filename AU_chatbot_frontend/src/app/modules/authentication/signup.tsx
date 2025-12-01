@@ -374,7 +374,7 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
             <>
               <div className="mt-6">
                 <label className="block mb-2 text-blue-900 text-sm font-semibold">
-                  {currentRole?.idLabel} <span className="text-xs text-blue-400">(Numbers only)</span>
+                  {currentRole?.idLabel} <span className="text-xs text-blue-400"></span>
                 </label>
                 <div className="relative">
                   <Input

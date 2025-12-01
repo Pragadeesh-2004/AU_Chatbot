@@ -31,12 +31,18 @@ import {
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
 import dynamic from "next/dynamic";
-import { MarkdownRenderer } from "@/components/MarkdownRenderer";
+import  MarkdownRenderer  from "@/components/MarkdownRenderer";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:3000";
 const GuestChatPage = dynamic(() => import("./guest-chat"), { ssr: false });
 
 export default function ChatbotPage() {
+  // ✅ Add particles state for animated background
+  const [particles, setParticles] = useState<
+    { left: number; top: number; duration: number; delay: number }[]
+  >([]);
+  const blurRef = useRef<HTMLDivElement>(null);
+
   // Add useEffect to inject scrollbar styles at component mount
   useEffect(() => {
     // Create and inject custom scrollbar styles
@@ -52,6 +58,21 @@ export default function ChatbotPage() {
     const style = document.createElement('style');
     style.id = styleId;
     style.textContent = `
+      @keyframes float {
+        0%, 100% { 
+          transform: translateY(0px) rotate(0deg); 
+          opacity: 0.8;
+        }
+        50% { 
+          transform: translateY(-15px) rotate(180deg); 
+          opacity: 1;
+        }
+      }
+
+      .particles-container .particle {
+        animation: float var(--duration, 3s) ease-in-out var(--delay, 0s) infinite;
+      }
+
       /* Custom scrollbar for the entire chatbot */
       .chatbot-container ::-webkit-scrollbar {
         width: 8px;
@@ -124,6 +145,15 @@ export default function ChatbotPage() {
     
     document.head.appendChild(style);
 
+    // Generate particles for animated background
+    const generatedParticles = Array.from({ length: 10 }, () => ({
+      left: Math.random() * 100,
+      top: Math.random() * 100,
+      duration: 3 + Math.random() * 4,
+      delay: Math.random() * 5,
+    }));
+    setParticles(generatedParticles);
+
     // Cleanup function
     return () => {
       const styleElement = document.getElementById(styleId);
@@ -134,6 +164,9 @@ export default function ChatbotPage() {
   }, []);
 
   const [user, setUser] = useState({ id: "guest", name: "Guest", role: "guest" });
+  // ✅ Add state to track if user explicitly entered guest mode
+  const [forceGuestMode, setForceGuestMode] = useState(false);
+  
   const [userMemory, setUserMemory] = useState<any>(null);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [composingNew, setComposingNew] = useState(false);
@@ -157,7 +190,7 @@ export default function ChatbotPage() {
   
   // ✅ Add copy state management
   const [copiedItems, setCopiedItems] = useState<{[key: string]: boolean}>({});
-
+ const [currentQuestion, setCurrentQuestion] = useState("");
   // ✅ Update file types - only PDF support
   const SUPPORTED_FILE_TYPES = [".pdf", "application/pdf"];
 
@@ -221,27 +254,72 @@ export default function ChatbotPage() {
   // ✅ Add copy functionality
   const copyToClipboard = async (text: string, type: 'question' | 'answer', messageIndex: number) => {
     try {
-      await navigator.clipboard.writeText(text);
+      // ✅ Strip markdown formatting for plain text copying
+      const plainText = type === 'answer' ? stripMarkdown(text) : text;
+      
+      await navigator.clipboard.writeText(plainText);
       const key = `${messageIndex}-${type}`;
       setCopiedItems(prev => ({ ...prev, [key]: true }));
-      
-      // Reset copy state after 2 seconds
-      setTimeout(() => {
-        setCopiedItems(prev => ({ ...prev, [key]: false }));
-      }, 2000);
+      setTimeout(() => setCopiedItems(prev => ({ ...prev, [key]: false })), 2000);
     } catch (err) {
       console.error('Failed to copy text: ', err);
-      // ✅ Show error in alert dialog
       setAlertDialogMessage("Failed to copy text to clipboard. Please try again.");
       setAlertDialogOpen(true);
     }
   };
+
+  // Add this helper function before the component
+  const stripMarkdown = (text: string): string => {
+    return text
+      // Remove markdown links [text](url) -> text
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1')
+      // Remove bold **text** or __text__ -> text
+      .replace(/(\*\*|__)(.*?)\1/g, '$2')
+      // Remove italic *text* or _text_ -> text
+      .replace(/(\*|_)(.*?)\1/g, '$2')
+      // Remove code blocks ```...``` -> content
+      .replace(/```[\s\S]*?```/g, (match) => {
+        return match.replace(/```/g, '').trim();
+      })
+      // Remove inline code `text` -> text
+      .replace(/`([^`]+)`/g, '$1')
+      // Remove headings ### text -> text
+      .replace(/^#+\s+/gm, '')
+      // Remove blockquotes > text -> text
+      .replace(/^>\s+/gm, '')
+      // Remove horizontal rules
+      .replace(/^[-*_]{3,}$/gm, '')
+      // Remove list markers * or - or + or 1. etc
+      .replace(/^[\s]*[-*+]\s+/gm, '')
+      .replace(/^[\s]*\d+\.\s+/gm, '')
+      // Clean up extra whitespace
+      .replace(/\n\n+/g, '\n')
+      .trim();
+  };
+
+  // Add useEffect for mouse tracking blur effect
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (blurRef.current) {
+        blurRef.current.style.left = `${(e.clientX / window.innerWidth) * 10}%`;
+        blurRef.current.style.top = `${(e.clientY / window.innerHeight) * 10}%`;
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, []);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       const id = window.localStorage.getItem("userId") || "guest";
       const name = window.localStorage.getItem("userName") || "Guest";
       const role = window.localStorage.getItem("userRole") || "guest";
+      
+      // ✅ Check if user explicitly chose guest mode
+      const isGuestMode = window.localStorage.getItem("forceGuestMode") === "true";
+      setForceGuestMode(isGuestMode);
+      
       setUser({ id, name, role });
     }
   }, []);
@@ -285,6 +363,12 @@ export default function ChatbotPage() {
   ) || [];
 
   const messages = userMemory?.sessions?.find((s: any) => s.session_id === selectedSession)?.qa || [];
+
+  // ✅ Update messages to include file information
+  const messagesWithFiles = userMemory?.sessions?.find((s: any) => s.session_id === selectedSession)?.qa?.map((msg: any, idx: number) => ({
+    ...msg,
+    files: msg.files || [] // Include files array if it exists
+  })) || [];
 
   // ✅ Update validateFiles to only handle PDF files and show errors in alert dialog
   // ✅ Limit to 1 PDF per request
@@ -346,8 +430,10 @@ export default function ChatbotPage() {
   };
 
   // Simple heuristic title generator (produce 2-3 meaningful words)
-  function generateTitleFromText(text: string, maxWords = 3, minWords = 2) {
+  function generateTitleFromText(text: string, maxWords = 4, minWords = 2) {
     if (!text) return "New Chat";
+    
+    // Clean the text
     const cleaned = text
       .replace(/\s+/g, " ")
       .trim()
@@ -355,35 +441,48 @@ export default function ChatbotPage() {
 
     if (!cleaned) return "New Chat";
 
+    // More comprehensive stopwords list
     const stopwords = new Set([
       "the","a","an","to","for","of","in","on","and","or","is","are","was","were",
-      "with","my","me","i","how","what","why","when","where","please","please:"
+      "with","my","me","i","how","what","why","when","where","please","please:",
+      "can","could","would","should","will","do","does","did","have","has","had",
+      "be","been","being","about","as","at","by","from","into","through","during",
+      "before","after","above","below","up","down","out","off","over","under",
+      "again","further","then","once","here","there","these","those","this","that",
+      "am","if","or","but","because","as","until","while","very","just","so","too",
+      "calculate","calculation","gpa","grade","point","average","student","score",
+      "given","let","use","using","find","determine","compute","get"
     ]);
 
     const tokens = cleaned.split(" ").map(t => t.trim()).filter(Boolean);
+    
+    // Filter out stopwords, keeping only meaningful words
     const meaningful = tokens.filter(w => !stopwords.has(w.toLowerCase()));
 
+    // If we have meaningful words, use them; otherwise use original tokens
     const pick = meaningful.length > 0 ? meaningful : tokens;
 
-    // prefer 2-3 words; if there are many tokens pick the most informative first few
+    // Get the first maxWords meaningful words
     const count = Math.min(maxWords, Math.max(minWords, pick.length));
     const titleWords = pick.slice(0, count);
 
+    // Capitalize each word
     const capitalize = (w: string) => w[0]?.toUpperCase() + w.slice(1).toLowerCase();
     let title = titleWords.map(capitalize).join(" ");
 
-    // fallback: if title too short or still generic, try using first 2 content words from full tokens
+    // If title is too short or still generic, try again
     if ((titleWords.length < minWords || title.match(/^(New|Chat)$/i)) && tokens.length > titleWords.length) {
       const fallback = tokens.filter(w => !stopwords.has(w.toLowerCase())).slice(0, minWords);
       if (fallback.length) title = fallback.map(capitalize).join(" ");
     }
 
-    // limit length
-    if (title.length > 40) {
-      title = title.split(" ").slice(0, 3).map(capitalize).join(" ");
+    // Limit length to 50 characters
+    if (title.length > 50) {
+      title = title.split(" ").slice(0, 4).map(capitalize).join(" ");
     }
 
-    return title || "New Chat";
+    // Final fallback
+    return title.trim() || "New Chat";
   }
 
   // Helper to get memory limits for the current user
@@ -439,21 +538,16 @@ export default function ChatbotPage() {
     // leave userMemory unchanged; UI will show empty message area for new chat
   };
 
-  // Update the handleSend function to show the question immediately
-  const [currentQuestion, setCurrentQuestion] = useState<string>("");
+  // Update the handleSend function to send as FormData instead of JSON
 
   const handleSend = async () => {
-    // ✅ Remove selectedImages from validation
-    if (!input.trim() && selectedFiles.length === 0) return;
+    // ✅ Always require message - files are optional
+    if (!input.trim()) return;
 
-    // Store current input and files
     const currentInput = input.trim();
     const currentFiles = [...selectedFiles];
-
-    // ✅ Only check input tokens and requests upfront - let server handle output token validation
     const currentInputTokens = calcTokens(currentInput);
     
-    // Check if user has sufficient input tokens and requests before proceeding
     if (balances.input !== undefined && currentInputTokens > balances.input) {
       const errorMsg = formatLimitError("input", currentInputTokens, balances.input);
       setAlertDialogMessage(errorMsg);
@@ -468,23 +562,18 @@ export default function ChatbotPage() {
       return;
     }
 
-    // ✅ Remove the output token pre-validation - let the server handle it with actual response
-
-    // ✅ Show question immediately and clear input
     setCurrentQuestion(currentInput);
     setInput("");
     setSelectedFiles([]);
-    setIsLoading(true); // Start loading immediately
+    setIsLoading(true);
 
     try {
       let sessionId = selectedSession;
 
-      // create session on first send if needed
       if (!sessionId) {
         const generatedTitle = generateTitleFromText(currentInput, 3, 2);
         sessionId = await createSession(generatedTitle);
         if (!sessionId) {
-          // ✅ On session creation error, restore everything and show error in alert
           setCurrentQuestion("");
           setInput(currentInput);
           setSelectedFiles(currentFiles);
@@ -497,26 +586,31 @@ export default function ChatbotPage() {
         setComposingNew(false);
       }
 
-      // Prepare files data for backend - only PDF files now
-      const filesData = currentFiles.map(file => ({
-        name: file.name,
-        size: file.size,
-        type: file.type
-      }));
+      // ✅ Get college name from localStorage
+      const collegeName = typeof window !== "undefined" 
+        ? window.localStorage.getItem("userCollege") || "Anna_university"
+        : "Anna_university";
 
-      // ✅ Make the API call - keep loader running during this time
+      // ✅ Create FormData instead of JSON
+      const formData = new FormData();
+      formData.append('user_query', currentInput);
+      formData.append('id', user.id);
+      formData.append('role', user.role);
+      formData.append('session_id', sessionId);
+      formData.append('timestamp', new Date().toISOString());
+      formData.append('collegeName', collegeName);
+
+      // ✅ Append files directly to FormData
+      for (const file of currentFiles) {
+        formData.append('file', file); // ✅ Actual file object, not metadata
+      }
+
+      // ✅ Send as FormData (no Content-Type header - browser will set it with boundary)
       const res = await fetch(`${API_BASE}/chatbot/add-qa`, {
         method: "POST",
         credentials: 'include',
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          role: user.role,
-          id: user.id,
-          session_id: sessionId,
-          question: currentInput,
-          timestamp: new Date().toISOString(),
-          files: filesData.length > 0 ? filesData : undefined
-        })
+        // ✅ Don't set Content-Type - let browser set it automatically
+        body: formData
       });
 
       const text = await res.text().catch(() => "");
@@ -524,30 +618,23 @@ export default function ChatbotPage() {
       try { json = text ? JSON.parse(text) : null; } catch {}
 
       if (!res.ok) {
-        // ✅ On API error, restore form and show error in alert dialog
         setCurrentQuestion("");
         setInput(currentInput);
         setSelectedFiles(currentFiles);
         setIsLoading(false);
         
-        // ✅ Extract error message for alert dialog - handle the exact error format you're getting
         let errorMessage = "Failed to send message. Please try again.";
         
-        console.log('Error response:', { json, text, status: res.status }); // Debug log
+        console.log('Error response:', { json, text, status: res.status });
         
-        // ✅ Handle the specific error format from your backend
         const code = json?.code;
         if (code === "INPUT_TOKEN_EXHAUSTED" || 
             code === "OUTPUT_TOKEN_EXHAUSTED" || 
             code === "REQUEST_LIMIT_EXHAUSTED" || 
             code === "FILE_COUNT_EXHAUSTED" || 
             code === "FILE_SIZE_EXCEEDED") {
-          
-          // ✅ Use the server's error message directly since it has the actual token counts
           errorMessage = json.message || json.error || errorMessage;
-          
-          console.log('Token limit error detected:', { code, message: errorMessage }); // Debug log
-          
+          console.log('Token limit error detected:', { code, message: errorMessage });
         } else if (json?.message) {
           errorMessage = typeof json.message === "string" ? json.message : JSON.stringify(json.message);
         } else if (json?.error) {
@@ -558,18 +645,15 @@ export default function ChatbotPage() {
           errorMessage = text;
         }
         
-        console.log('Final error message:', errorMessage); // Debug log
+        console.log('Final error message:', errorMessage);
         
-        // ✅ Show error in alert dialog
         setAlertDialogMessage(errorMessage);
         setAlertDialogOpen(true);
         return;
       }
 
-      // ✅ SUCCESS: Keep loading while refreshing data
       setCurrentQuestion("");
       
-      // Refresh memory/balances to show the new message with real bot response
       try {
         const memRes = await fetch(`${API_BASE}/chatbot/user-memory?role=${user.role}&id=${user.id}`, { credentials: 'include' });
         if (memRes.ok) {
@@ -589,7 +673,6 @@ export default function ChatbotPage() {
     } catch (err: any) {
       console.error('Unexpected error in handleSend:', err);
       
-      // ✅ On unexpected error, restore form and show error in alert dialog
       setCurrentQuestion("");
       setInput(currentInput);
       setSelectedFiles(currentFiles);
@@ -601,11 +684,9 @@ export default function ChatbotPage() {
         errorMessage = err;
       }
       
-      // ✅ Show error in alert dialog
       setAlertDialogMessage(errorMessage);
       setAlertDialogOpen(true);
     } finally {
-      // ✅ Always stop loading when everything is done
       setIsLoading(false);
     }
   };
@@ -703,7 +784,7 @@ export default function ChatbotPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showUploadOptions]);
 
-  if (user.role === "guest") {
+  if (user.role === "guest" || forceGuestMode) {
     return <GuestChatPage />;
   }
 
@@ -727,8 +808,9 @@ export default function ChatbotPage() {
   // Disable uploads when any limit is exhausted
   const uploadsDisabled = tokensExhausted || requestsExhausted || fileLimitsExhausted;
 
-  // Disable the send button if no content, guest user, or request limit exhausted
-  const sendDisabled = (!input.trim() && selectedFiles.length === 0) || 
+  // Disable the send button if no message, guest user, or request limit exhausted
+  // ✅ Message is always required, files are optional
+  const sendDisabled = !input.trim() || 
                        user.role === "guest" || 
                        requestsExhausted;
 
@@ -737,6 +819,30 @@ export default function ChatbotPage() {
 
   return (
     <div className="h-screen w-full flex bg-gradient-to-br from-blue-950 via-blue-900 to-blue-800 relative overflow-hidden chatbot-container">
+      {/* Animated particles background */}
+      <div className="absolute inset-0 pointer-events-none">
+        {particles.map((p, i) => (
+          <div
+            key={`particle-${i}`}
+            className="absolute w-1 h-1 bg-white/20 rounded-full"
+            style={{
+              left: `${p.left}%`,
+              top: `${p.top}%`,
+              animation: `float ${p.duration}s ease-in-out infinite`,
+              animationDelay: `${p.delay}s`
+            }}
+          />
+        ))}
+        <div 
+          ref={blurRef}
+          className="absolute w-72 h-72 bg-gradient-to-br from-cyan-300/20 via-blue-400/15 to-blue-700/20 rounded-full blur-3xl transition-all duration-1000"
+          style={{
+            left: `5%`,
+            top: `5%`,
+          }}
+        />
+      </div>
+
       {!profileSidebarOpen && (
         <div className={`fixed top-0 left-0 h-full flex flex-col bg-blue-950/90 border-r border-blue-900 transition-all duration-300 z-30 ${sidebarOpen ? "w-72" : "w-16"}`}>
           <div className="flex items-center gap-2 px-3 py-4 justify-start">

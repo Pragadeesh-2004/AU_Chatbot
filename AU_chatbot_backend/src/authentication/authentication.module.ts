@@ -4,8 +4,10 @@ import { AuthenticationService } from './authentication.service';
 import { AuthenticationController } from './authentication.controller';
 import { User, UserSchema } from './schemas/user.schema';
 import { AdminModule } from '../admin/admin.module';
-import { ChatbotModule } from 'src/chatbot/chatbot.module';
-import { AuthModule } from 'src/auth/auth.module'; // provides AuthService
+import { AuthModule } from 'src/auth/auth.module';
+import { ChatbotModule } from 'src/chatbot/chatbot.module'; // ✅ Import ChatbotModule
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
 
 @Module({
   imports: [
@@ -16,10 +18,14 @@ import { AuthModule } from 'src/auth/auth.module'; // provides AuthService
       connectionName: 'university',
     }),
     MongooseModule.forFeature([{ name: User.name, schema: UserSchema }], 'university'),
-    // use forwardRef to avoid circular dependency issues and ensure exported providers are available
     forwardRef(() => AdminModule),
-    forwardRef(() => ChatbotModule),
-    forwardRef(() => AuthModule), // <-- ensure AuthService provider is available
+    forwardRef(() => AuthModule),
+    forwardRef(() => ChatbotModule), // ✅ Use forwardRef for ChatbotModule
+    PassportModule,
+    JwtModule.register({
+      secret: process.env.JWT_SECRET || 'your-secret-key',
+      signOptions: { expiresIn: '7d' }
+    })
   ],
   controllers: [AuthenticationController],
   providers: [AuthenticationService],

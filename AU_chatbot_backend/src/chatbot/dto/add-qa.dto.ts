@@ -15,17 +15,19 @@ export class AddQADto {
 
   @IsOptional()
   @IsString()
-  answer?: string;
-
-  @IsOptional()
-  @IsString()
   timestamp?: string;
 
   @IsOptional()
-  @IsString()
-  session_name?: string;
+  @IsArray()
+  files?: Array<{
+    name: string;
+    size: number;
+    type: string;
+    buffer?: Buffer; // ✅ File buffer from FormData
+    data?: string; // ✅ Base64 encoded content (legacy)
+  }>; // File metadata
 
   @IsOptional()
-  @IsArray()
-  files?: Array<{ name: string; size: number; type: string }>; // File metadata
+  @IsString()
+  collegeName?: string; // ✅ Add this field
 }

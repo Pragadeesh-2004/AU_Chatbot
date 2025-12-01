@@ -68,6 +68,8 @@ export class AuthenticationController {
     }
   }
 
+  // ✅ Add @Public() decorator and accept college parameter
+  @Public()
   @Post('forgot-password/send-code')
   async forgotPasswordSendCode(@Body() body: { college: string; role: string; id: string }) {
     try {
@@ -77,6 +79,8 @@ export class AuthenticationController {
     }
   }
 
+  // ✅ Add @Public() decorator 
+  @Public()
   @Post('forgot-password/verify-code')
   async forgotPasswordVerifyCode(@Body() body: { role: string; id: string; code: string }) {
     try {
@@ -86,6 +90,8 @@ export class AuthenticationController {
     }
   }
 
+  // ✅ Add @Public() decorator and accept college parameter
+  @Public()
   @Post('forgot-password/reset')
   async forgotPasswordReset(@Body() body: { college: string; role: string; id: string; code: string; password: string }) {
     try {
