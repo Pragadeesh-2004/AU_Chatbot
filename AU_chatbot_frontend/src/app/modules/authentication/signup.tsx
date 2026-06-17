@@ -322,24 +322,26 @@ export default function SignupPage({ onBackToLogin, showDialog }: SignupPageProp
       {/* Step 1: College, Role, ID, Send Verification */}
       {step === 1 && (
         <>
-          <div>
-            <label className="block mb-2 text-blue-900 text-sm font-semibold">College</label>
-            <div className="relative">
-              <Select value={college} onValueChange={setCollege}>
-                <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
-                  <SelectValue placeholder="Select college" />
-                </SelectTrigger>
-                <SelectContent className="bg-white text-blue-900 border-blue-400">
-                  {collegeOptions.map(opt => (
-                    <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-             
+          {role !== "admin" && (
+            <div>
+              <label className="block mb-2 text-blue-900 text-sm font-semibold">College</label>
+              <div className="relative">
+                <Select value={college} onValueChange={setCollege}>
+                  <SelectTrigger className="w-full bg-white text-blue-900 border-blue-400 h-10 px-3 text-sm rounded-lg focus:ring-2 focus:ring-cyan-200">
+                    <SelectValue placeholder="Select college" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white text-blue-900 border-blue-400">
+                    {collegeOptions.map(opt => (
+                      <SelectItem key={opt.value} value={opt.value} className="hover:bg-blue-100 hover:text-blue-900">
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+               
+              </div>
             </div>
-          </div>
+          )}
           <div>
             <label className="block mb-2 text-blue-900 text-sm font-semibold">Role</label>
             <Select value={role} onValueChange={value => { setRole(value); setId(""); setInputError(null); }}>
